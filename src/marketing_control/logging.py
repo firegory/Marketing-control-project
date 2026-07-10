@@ -68,7 +68,10 @@ def configure_logging(
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    logger.handlers.clear()
+    for handler in logger.handlers[:]:
+        if isinstance(handler, _SecureRotatingFileHandler):
+            logger.removeHandler(handler)
+            handler.close()
 
     handler = _SecureRotatingFileHandler(
         Path(log_directory) / "marketing-control.log",

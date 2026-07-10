@@ -48,6 +48,17 @@ def test_posix_paths_require_home_in_the_provided_environment() -> None:
         AppPaths.for_user("MarketingControl", environment={}, platform="linux")
 
 
+def test_macos_paths_use_library_directories() -> None:
+    paths = AppPaths.for_user(
+        "MarketingControl", environment={"HOME": "/Users/ada"}, platform="darwin"
+    )
+
+    library = Path("/Users/ada/Library")
+    assert paths.data == library / "Application Support/MarketingControl"
+    assert paths.config == library / "Application Support/MarketingControl"
+    assert paths.logs == library / "Logs/MarketingControl"
+
+
 def test_settings_validate_application_name_and_expose_paths() -> None:
     with pytest.raises(ValueError, match="application_name"):
         Settings.load(" ", environment={"HOME": "/home/ada"}, platform="linux")

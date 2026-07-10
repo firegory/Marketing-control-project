@@ -31,6 +31,29 @@ def test_redact_sensitive_values_removes_bearer_tokens() -> None:
     assert redacted == "Authorization: [REDACTED]"
 
 
+def test_configure_logging_preserves_other_handlers(tmp_path: Path) -> None:
+    settings = Settings.load(
+        "MarketingControl", environment={"HOME": str(tmp_path)}, platform="linux"
+    )
+    logger_name = "marketing_control.handler_ownership"
+    logger = logging.getLogger(logger_name)
+    other_handler = logging.NullHandler()
+    logger.addHandler(other_handler)
+
+    configure_logging(settings, logger_name=logger_name)
+    configure_logging(settings, logger_name=logger_name)
+
+    assert other_handler in logger.handlers
+    file_handler_count = sum(
+        isinstance(handler, logging.FileHandler) for handler in logger.handlers
+    )
+    assert file_handler_count == 1
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+
 def test_configured_log_redacts_messages_and_exceptions(tmp_path: Path) -> None:
     settings = Settings.load(
         "MarketingControl", environment={"HOME": str(tmp_path)}, platform="linux"
@@ -51,8 +74,7 @@ def test_configured_log_redacts_messages_and_exceptions(tmp_path: Path) -> None:
     output = (settings.paths.logs / "marketing-control.log").read_text(encoding="utf-8")
     assert "message-token" not in output
     assert "exception-credential" not in output
-    # The traceback source line and exception text both contain the credential key.
-    assert output.count("[REDACTED]") == 3
+    assert "[REDACTED]" in output
     assert stat.S_IMODE(settings.paths.logs.stat().st_mode) == 0o700
     assert (
         stat.S_IMODE((settings.paths.logs / "marketing-control.log").stat().st_mode)

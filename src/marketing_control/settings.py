@@ -41,6 +41,14 @@ class AppPaths:
             )
 
         home = _required_directory(environment, "HOME")
+        if platform == "darwin":
+            library = home / "Library"
+            return cls(
+                data=library / "Application Support" / application_name,
+                config=library / "Application Support" / application_name,
+                logs=library / "Logs" / application_name,
+            )
+
         return cls(
             data=home / ".local" / "share" / application_name,
             config=home / ".config" / application_name,
