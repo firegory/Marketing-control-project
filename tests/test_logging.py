@@ -1,6 +1,7 @@
 """Tests for safe local log output."""
 
 import logging
+import stat
 from pathlib import Path
 
 from marketing_control.logging import configure_logging, redact_sensitive_values
@@ -21,6 +22,13 @@ def test_redact_sensitive_values_removes_supported_credentials() -> None:
     assert "secret-value" not in redacted
     assert "json-secret" not in redacted
     assert redacted.count("[REDACTED]") == 5
+
+
+def test_redact_sensitive_values_removes_bearer_tokens() -> None:
+    redacted = redact_sensitive_values("Authorization: Bearer access-token")
+
+    assert "access-token" not in redacted
+    assert redacted == "Authorization: [REDACTED]"
 
 
 def test_configured_log_redacts_messages_and_exceptions(tmp_path: Path) -> None:
@@ -45,3 +53,8 @@ def test_configured_log_redacts_messages_and_exceptions(tmp_path: Path) -> None:
     assert "exception-credential" not in output
     # The traceback source line and exception text both contain the credential key.
     assert output.count("[REDACTED]") == 3
+    assert stat.S_IMODE(settings.paths.logs.stat().st_mode) == 0o700
+    assert (
+        stat.S_IMODE((settings.paths.logs / "marketing-control.log").stat().st_mode)
+        == 0o600
+    )

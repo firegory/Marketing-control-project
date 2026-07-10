@@ -1,11 +1,13 @@
-"""Safe, consistently formatted local application logging."""
+"""Local application logging with best-effort credential redaction."""
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 from marketing_control.settings import Settings
 
@@ -17,7 +19,7 @@ _SENSITIVE_VALUE = re.compile(
     )
     (?P<key_quote>[\"']?)
     (?P<separator>\s*(?:=|:)\s*|\s+)
-    (?P<value>\"[^\"]*\"|'[^']*'|[^\s,;]+)
+    (?P<value>\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|(?:Bearer\s+)?[^\s,;]+)
     """
 )
 
@@ -34,7 +36,7 @@ def redact_sensitive_values(value: str) -> str:
 
 
 class RedactingFormatter(logging.Formatter):
-    """Formatter that prevents sensitive text in messages and tracebacks."""
+    """Apply best-effort credential redaction to messages and tracebacks."""
 
     def format(self, record: logging.LogRecord) -> str:
         record_copy = logging.makeLogRecord(record.__dict__.copy())
@@ -46,19 +48,29 @@ class RedactingFormatter(logging.Formatter):
         return redact_sensitive_values(super().formatException(exc_info))
 
 
+class _SecureRotatingFileHandler(RotatingFileHandler):
+    """Create log files with owner-only permissions on supported platforms."""
+
+    def _open(self) -> Any:
+        stream = super()._open()
+        os.chmod(self.baseFilename, 0o600)
+        return stream
+
+
 def configure_logging(
     settings: Settings, *, logger_name: str = "marketing_control"
 ) -> logging.Logger:
     """Configure a rotating file logger using the paths from ``settings``."""
     log_directory = settings.paths.logs
-    log_directory.mkdir(parents=True, exist_ok=True)
+    log_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(log_directory, 0o700)
 
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
     logger.handlers.clear()
 
-    handler = RotatingFileHandler(
+    handler = _SecureRotatingFileHandler(
         Path(log_directory) / "marketing-control.log",
         maxBytes=1_000_000,
         backupCount=3,

@@ -26,8 +26,7 @@ class AppPaths:
         platform: str | None = None,
     ) -> AppPaths:
         """Resolve per-user paths without creating them."""
-        if not application_name or application_name.isspace():
-            raise ValueError("application_name must not be empty")
+        _validate_application_name(application_name)
 
         environment = os.environ if environment is None else environment
         platform = sys.platform if platform is None else platform
@@ -41,7 +40,7 @@ class AppPaths:
                 logs=local_app_data / application_name / "Logs",
             )
 
-        home = Path(environment.get("HOME", str(Path.home())))
+        home = _required_directory(environment, "HOME")
         return cls(
             data=home / ".local" / "share" / application_name,
             config=home / ".config" / application_name,
@@ -57,8 +56,7 @@ class Settings:
     paths: AppPaths
 
     def __post_init__(self) -> None:
-        if not self.application_name or self.application_name.isspace():
-            raise ValueError("application_name must not be empty")
+        _validate_application_name(self.application_name)
 
     @classmethod
     def load(
@@ -80,5 +78,16 @@ class Settings:
 def _required_directory(environment: Mapping[str, str], name: str) -> Path:
     value = environment.get(name)
     if not value:
-        raise ValueError(f"{name} must be set on Windows")
+        raise ValueError(f"{name} must be set")
     return Path(value)
+
+
+def _validate_application_name(application_name: str) -> None:
+    if not application_name or application_name.isspace():
+        raise ValueError("application_name must not be empty")
+    if (
+        application_name in {".", ".."}
+        or "/" in application_name
+        or "\\" in application_name
+    ):
+        raise ValueError("application_name must be a single path segment")

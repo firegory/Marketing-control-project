@@ -33,6 +33,21 @@ def test_windows_paths_require_known_folder_environment(variable: str) -> None:
         AppPaths.for_user("MarketingControl", environment=environment, platform="win32")
 
 
+@pytest.mark.parametrize("application_name", [".", "..", "nested/name", r"nested\name"])
+def test_paths_reject_application_names_that_escape_their_base(
+    application_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="single path segment"):
+        AppPaths.for_user(
+            application_name, environment={"HOME": "/home/ada"}, platform="linux"
+        )
+
+
+def test_posix_paths_require_home_in_the_provided_environment() -> None:
+    with pytest.raises(ValueError, match="HOME"):
+        AppPaths.for_user("MarketingControl", environment={}, platform="linux")
+
+
 def test_settings_validate_application_name_and_expose_paths() -> None:
     with pytest.raises(ValueError, match="application_name"):
         Settings.load(" ", environment={"HOME": "/home/ada"}, platform="linux")
