@@ -9,6 +9,7 @@ description = "Foundation for the Marketing Control project."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "keyring>=25.7.0",
     "duckdb>=1.5.4",
 ]
 

@@ -48,3 +48,9 @@ On Linux and other POSIX platforms, per-user files are stored in:
 Logs rotate locally after 1 MB and retain up to three backups. Log messages and
 exception output redact secrets, passwords, OAuth and developer tokens,
 credentials, authorization values, and API keys as `[REDACTED]`.
+
+## Credentials
+
+On Windows, credentials are stored through the operating system's Credential
+Manager using `keyring`. Other platforms fail safely: the application does not
+fall back to plaintext files, configuration, or application data.
