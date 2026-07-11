@@ -11,6 +11,7 @@ from marketing_control.settings import Settings
 
 OAUTH_CLIENT_SECRET_NAME = "google_ads_oauth_client_secret"
 DEVELOPER_TOKEN_NAME = "google_ads_developer_token"
+REFRESH_TOKEN_NAME = "google_ads_refresh_token"
 _CUSTOMER_ID = re.compile(r"^\d{10}$")
 
 
