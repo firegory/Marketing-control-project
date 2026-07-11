@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Foundation for the Marketing Control project."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "keyring>=25.7.0",
+]
 
 [project.scripts]
 marketing-control = "marketing_control:main"
