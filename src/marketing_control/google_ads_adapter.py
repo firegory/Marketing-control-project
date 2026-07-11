@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 import grpc
@@ -16,6 +18,7 @@ from google.api_core.exceptions import (
     ResourceExhausted,
     ServiceUnavailable,
 )
+from google.auth.exceptions import RefreshError
 
 from marketing_control.credentials import CredentialStore, CredentialStoreError
 from marketing_control.google_ads import (
@@ -43,6 +46,33 @@ _RETRYABLE_TRANSPORT_ERRORS = (
 
 class GoogleAdsSearchStreamAdapterError(RuntimeError):
     """An actionable Google Ads adapter error that never contains secrets."""
+
+
+class GoogleAdsConnectionState(StrEnum):
+    """The safe, user-actionable state of the configured Ads connection."""
+
+    USABLE = "usable"
+    INVALID_AUTHORIZATION = "invalid_authorization"
+    NOT_CONFIGURED = "not_configured"
+    TEMPORARY_FAILURE = "temporary_failure"
+
+
+@dataclass(frozen=True)
+class GoogleAdsConnectionStatus:
+    """Connection validation result, containing no credentials or error details."""
+
+    state: GoogleAdsConnectionState
+    customer_id: str | None = None
+    customer_name: str | None = None
+    currency_code: str | None = None
+    time_zone: str | None = None
+
+
+class GoogleAdsConnectionValidator(Protocol):
+    """Validate the configured Google Ads customer connection."""
+
+    def connection_status(self) -> GoogleAdsConnectionStatus:
+        """Return a safe, typed connection validation result."""
 
 
 class GoogleAdsService(Protocol):
@@ -117,9 +147,39 @@ class GoogleAdsSearchStreamAdapter:
 
         raise AssertionError("unreachable")
 
-    def _create_client(self) -> tuple[GoogleAdsClient, GoogleAdsSettings]:
+    def connection_status(self) -> GoogleAdsConnectionStatus:
+        """Validate authorization and load the configured customer's safe identity."""
+        try:
+            client, metadata = self._create_client(require_refresh_token=True)
+        except (_NotConfiguredError, ValueError):
+            return GoogleAdsConnectionStatus(GoogleAdsConnectionState.NOT_CONFIGURED)
+        except _TemporaryConnectionError:
+            return GoogleAdsConnectionStatus(GoogleAdsConnectionState.TEMPORARY_FAILURE)
+
+        try:
+            service: GoogleAdsService = client.get_service("GoogleAdsService")
+            batches = service.search_stream(
+                customer_id=metadata.customer_id,
+                query=(
+                    "SELECT customer.id, customer.descriptive_name, "
+                    "customer.currency_code, customer.time_zone FROM customer"
+                ),
+            )
+            return _connection_status_from_batches(batches)
+        except Exception as error:
+            if _is_authorization_error(error):
+                return GoogleAdsConnectionStatus(
+                    GoogleAdsConnectionState.INVALID_AUTHORIZATION
+                )
+            return GoogleAdsConnectionStatus(GoogleAdsConnectionState.TEMPORARY_FAILURE)
+
+    def _create_client(
+        self, *, require_refresh_token: bool = False
+    ) -> tuple[GoogleAdsClient, GoogleAdsSettings]:
         metadata = self._metadata_store.load()
         if metadata is None:
+            if require_refresh_token:
+                raise _NotConfiguredError
             raise GoogleAdsSearchStreamAdapterError(
                 "Google Ads is not configured for this application."
             )
@@ -128,10 +188,16 @@ class GoogleAdsSearchStreamAdapter:
             developer_token = self._credential_store.get(DEVELOPER_TOKEN_NAME)
             refresh_token = self._credential_store.get(REFRESH_TOKEN_NAME)
         except CredentialStoreError:
+            if require_refresh_token:
+                raise _TemporaryConnectionError from None
             raise GoogleAdsSearchStreamAdapterError(
                 "Google Ads credentials could not be loaded from secure storage."
             ) from None
-        if not client_secret or not developer_token:
+        if not client_secret or not developer_token or (
+            require_refresh_token and not refresh_token
+        ):
+            if require_refresh_token:
+                raise _NotConfiguredError
             raise GoogleAdsSearchStreamAdapterError(
                 "Google Ads credentials are incomplete in secure storage."
             )
@@ -149,6 +215,8 @@ class GoogleAdsSearchStreamAdapter:
         try:
             return self._client_factory(config), metadata
         except Exception:
+            if require_refresh_token:
+                raise _NotConfiguredError from None
             raise GoogleAdsSearchStreamAdapterError(
                 "Google Ads client configuration is invalid. Check the stored settings "
                 "and credentials."
@@ -169,6 +237,62 @@ def _is_transient_google_ads_error(error: Exception) -> bool:
     if isinstance(error, grpc.RpcError):
         return _rpc_status_is_transient(error)
     return isinstance(error, _RETRYABLE_TRANSPORT_ERRORS)
+
+
+class _NotConfiguredError(RuntimeError):
+    """Internal signal for a validation request missing required local setup."""
+
+
+class _TemporaryConnectionError(RuntimeError):
+    """Internal signal for a local failure that may recover without user action."""
+
+
+def _is_authorization_error(error: Exception) -> bool:
+    """Recognize only explicit authorization failures without exposing their details."""
+    if isinstance(error, RefreshError):
+        return True
+    if isinstance(error, GoogleAdsException):
+        return _rpc_status_is_authorization_failure(error.error)
+    if isinstance(error, grpc.RpcError):
+        return _rpc_status_is_authorization_failure(error)
+    return False
+
+
+def _rpc_status_is_authorization_failure(error: grpc.RpcError) -> bool:
+    try:
+        return error.code() == grpc.StatusCode.UNAUTHENTICATED
+    except Exception:
+        return False
+
+
+def _connection_status_from_batches(
+    batches: Iterable[object],
+) -> GoogleAdsConnectionStatus:
+    """Extract one customer row while treating malformed responses as temporary."""
+    for batch in batches:
+        results = getattr(batch, "results", ())
+        for result in results:
+            customer = getattr(result, "customer", None)
+            customer_id = _customer_value(customer, "id")
+            customer_name = _customer_value(customer, "descriptive_name")
+            currency_code = _customer_value(customer, "currency_code")
+            time_zone = _customer_value(customer, "time_zone")
+            if all((customer_id, customer_name, currency_code, time_zone)):
+                return GoogleAdsConnectionStatus(
+                    GoogleAdsConnectionState.USABLE,
+                    customer_id=customer_id,
+                    customer_name=customer_name,
+                    currency_code=currency_code,
+                    time_zone=time_zone,
+                )
+    return GoogleAdsConnectionStatus(GoogleAdsConnectionState.TEMPORARY_FAILURE)
+
+
+def _customer_value(customer: object, name: str) -> str | None:
+    value = getattr(customer, name, None)
+    if isinstance(value, (str, int)) and str(value):
+        return str(value)
+    return None
 
 
 def _rpc_status_is_transient(error: grpc.RpcError) -> bool:

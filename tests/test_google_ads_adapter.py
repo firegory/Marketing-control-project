@@ -10,6 +10,7 @@ import grpc
 import pytest
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
+from google.auth.exceptions import RefreshError
 
 from marketing_control.credentials import CredentialStoreError
 from marketing_control.google_ads import (
@@ -20,6 +21,7 @@ from marketing_control.google_ads import (
     GoogleAdsSettingsStore,
 )
 from marketing_control.google_ads_adapter import (
+    GoogleAdsConnectionState,
     GoogleAdsSearchStreamAdapter,
     GoogleAdsSearchStreamAdapterError,
 )
@@ -73,6 +75,24 @@ class FakeRpcError(grpc.RpcError):
 
     def code(self) -> grpc.StatusCode:
         return self._status
+
+
+class FakeCustomer:
+    def __init__(self) -> None:
+        self.id = 1234567890
+        self.descriptive_name = "Example Account"
+        self.currency_code = "USD"
+        self.time_zone = "America/New_York"
+
+
+class FakeResult:
+    def __init__(self) -> None:
+        self.customer = FakeCustomer()
+
+
+class FakeBatch:
+    def __init__(self) -> None:
+        self.results = [FakeResult()]
 
 
 def _google_ads_error(status: grpc.StatusCode) -> GoogleAdsException:
@@ -236,3 +256,74 @@ def test_search_stream_reports_safe_credential_store_error(tmp_path: Path) -> No
         adapter.search_stream("SELECT customer.id FROM customer")
 
     assert "credential-secret" not in str(raised.value)
+
+
+def test_connection_status_loads_the_configured_customer_identity(
+    tmp_path: Path,
+) -> None:
+    service = FakeService([[FakeBatch()]])
+    adapter, _ = _adapter(tmp_path, service)
+
+    status = adapter.connection_status()
+
+    assert status.state == GoogleAdsConnectionState.USABLE
+    assert status.customer_id == "1234567890"
+    assert status.customer_name == "Example Account"
+    assert status.currency_code == "USD"
+    assert status.time_zone == "America/New_York"
+    assert service.calls == [
+        (
+            "1234567890",
+            "SELECT customer.id, customer.descriptive_name, customer.currency_code, "
+            "customer.time_zone FROM customer",
+        )
+    ]
+
+
+def test_connection_status_requires_complete_authorized_configuration(
+    tmp_path: Path,
+) -> None:
+    credentials = FakeCredentialStore(
+        {
+            OAUTH_CLIENT_SECRET_NAME: "client-secret",
+            DEVELOPER_TOKEN_NAME: "developer-token",
+        }
+    )
+    adapter, _ = _adapter(tmp_path, FakeService([]), credentials=credentials)
+
+    status = adapter.connection_status()
+
+    assert status.state == GoogleAdsConnectionState.NOT_CONFIGURED
+
+
+def test_connection_status_detects_invalid_authorization(tmp_path: Path) -> None:
+    adapter, _ = _adapter(
+        tmp_path,
+        FakeService([_google_ads_error(grpc.StatusCode.UNAUTHENTICATED)]),
+    )
+
+    assert (
+        adapter.connection_status().state
+        == GoogleAdsConnectionState.INVALID_AUTHORIZATION
+    )
+
+
+def test_connection_status_detects_an_expired_refresh_token(tmp_path: Path) -> None:
+    adapter, _ = _adapter(
+        tmp_path,
+        FakeService([RefreshError("expired-token")]),  # type: ignore[no-untyped-call]
+    )
+
+    assert (
+        adapter.connection_status().state
+        == GoogleAdsConnectionState.INVALID_AUTHORIZATION
+    )
+
+
+def test_connection_status_hides_temporary_provider_errors(tmp_path: Path) -> None:
+    adapter, _ = _adapter(tmp_path, FakeService([RuntimeError("secret-value")]))
+
+    status = adapter.connection_status()
+
+    assert status.state == GoogleAdsConnectionState.TEMPORARY_FAILURE
+    assert status.customer_name is None
