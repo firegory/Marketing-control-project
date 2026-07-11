@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Google Ads setup | Marketing Control</title>
+  </head>
+  <body>
+    <main>
+      <h1>Set up Google Ads</h1>
+      <p>Configure one Google Ads account. Authorization and connection testing happen later.</p>
+      {% if configured %}<p role="status">Google Ads settings are saved. Secrets are not displayed.</p>{% endif %}
+      <form method="post" action="/settings/google-ads">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <p>
+          <label for="oauth_client_id">OAuth client ID</label><br>
+          <input id="oauth_client_id" name="oauth_client_id" autocomplete="off" required>
+        </p>
+        <p>
+          <label for="oauth_client_secret">OAuth client secret</label><br>
+          <input id="oauth_client_secret" name="oauth_client_secret" type="password" autocomplete="new-password" required>
+        </p>
+        <p>
+          <label for="customer_id">Google Ads customer ID</label><br>
+          <input id="customer_id" name="customer_id" inputmode="numeric" placeholder="123-456-7890" required>
+        </p>
+        <p>
+          <label for="login_customer_id">Login customer ID (optional)</label><br>
+          <input id="login_customer_id" name="login_customer_id" inputmode="numeric" placeholder="123-456-7890">
+        </p>
+        <p>
+          <label for="developer_token">Developer token</label><br>
+          <input id="developer_token" name="developer_token" type="password" autocomplete="new-password" required>
+        </p>
+        <button type="submit">Save Google Ads settings</button>
+      </form>
+    </main>
+  </body>
+</html>
