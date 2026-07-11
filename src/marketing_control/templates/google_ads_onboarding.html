@@ -8,8 +8,9 @@
   <body>
     <main>
       <h1>Set up Google Ads</h1>
-      <p>Configure one Google Ads account. Authorization and connection testing happen later.</p>
+      <p>Configure one Google Ads account, then authorize it in your browser.</p>
       {% if configured %}<p role="status">Google Ads settings are saved. Secrets are not displayed.</p>{% endif %}
+      {% if oauth_message %}<p role="status">{{ oauth_message[0] }}</p>{% endif %}
       <form method="post" action="/settings/google-ads">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <p>
@@ -34,6 +35,12 @@
         </p>
         <button type="submit">Save Google Ads settings</button>
       </form>
+      {% if configured %}
+      <form method="post" action="/settings/google-ads/authorize">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Authorize Google Ads</button>
+      </form>
+      {% endif %}
     </main>
   </body>
 </html>

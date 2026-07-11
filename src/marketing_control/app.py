@@ -17,10 +17,19 @@ from marketing_control.credentials import (
 from marketing_control.google_ads import (
     DEVELOPER_TOKEN_NAME,
     OAUTH_CLIENT_SECRET_NAME,
+    REFRESH_TOKEN_NAME,
     GoogleAdsSettings,
     GoogleAdsSettingsStore,
     normalize_customer_id,
     normalize_optional_customer_id,
+)
+from marketing_control.oauth import (
+    DesktopOAuthAuthorizer,
+    GoogleDesktopOAuthAuthorizer,
+    OAuthAuthorizationDeniedError,
+    OAuthCallbackError,
+    OAuthCancelledError,
+    OAuthTokenExchangeError,
 )
 from marketing_control.settings import Settings
 
@@ -31,6 +40,7 @@ def create_app(
     *,
     settings: Settings | None = None,
     credential_store: CredentialStore | None = None,
+    oauth_authorizer: DesktopOAuthAuthorizer | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
     app = FastAPI(title="Marketing Control", docs_url=None, redoc_url=None)
@@ -38,6 +48,9 @@ def create_app(
     metadata_store = GoogleAdsSettingsStore(settings)
     credential_store = (
         create_credential_store() if credential_store is None else credential_store
+    )
+    oauth_authorizer = (
+        GoogleDesktopOAuthAuthorizer() if oauth_authorizer is None else oauth_authorizer
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -51,7 +64,9 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/settings/google-ads", response_class=HTMLResponse)
-    def google_ads_settings(request: Request) -> HTMLResponse:
+    def google_ads_settings(
+        request: Request, oauth_status: str | None = None
+    ) -> HTMLResponse:
         """Render the one-account Google Ads credential onboarding form."""
         csrf_token = secrets.token_urlsafe()
         response = _templates.TemplateResponse(
@@ -60,6 +75,7 @@ def create_app(
             context={
                 "csrf_token": csrf_token,
                 "configured": metadata_store.load() is not None,
+                "oauth_message": _oauth_message(oauth_status),
             },
         )
         response.set_cookie(
@@ -123,4 +139,73 @@ def create_app(
             "/settings/google-ads", status_code=status.HTTP_303_SEE_OTHER
         )
 
+    @app.post("/settings/google-ads/authorize")
+    def authorize_google_ads(
+        request: Request, csrf_token: Annotated[str, Form()]
+    ) -> RedirectResponse:
+        """Start a browser-based desktop OAuth flow for saved Google Ads settings."""
+        cookie_token = request.cookies.get("google_ads_csrf", "")
+        if not hmac.compare_digest(csrf_token, cookie_token):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+
+        configured = metadata_store.load()
+        if configured is None:
+            return _oauth_redirect("not-configured")
+        try:
+            client_secret = credential_store.get(OAUTH_CLIENT_SECRET_NAME)
+        except CredentialStoreError:
+            return _oauth_redirect("storage-error")
+        if not client_secret:
+            return _oauth_redirect("not-configured")
+
+        try:
+            refresh_token = oauth_authorizer.authorize(
+                client_id=configured.oauth_client_id, client_secret=client_secret
+            )
+            credential_store.save(REFRESH_TOKEN_NAME, refresh_token)
+        except OAuthAuthorizationDeniedError:
+            return _oauth_redirect("denied")
+        except OAuthCancelledError:
+            return _oauth_redirect("cancelled")
+        except OAuthCallbackError:
+            return _oauth_redirect("callback-error")
+        except OAuthTokenExchangeError:
+            return _oauth_redirect("token-error")
+        except CredentialStoreError:
+            return _oauth_redirect("storage-error")
+        return _oauth_redirect("authorized")
+
     return app
+
+
+def _oauth_redirect(oauth_status: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"/settings/google-ads?oauth_status={oauth_status}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _oauth_message(oauth_status: str | None) -> tuple[str, bool] | None:
+    messages = {
+        "authorized": (
+            "Google authorization completed. The refresh token is stored securely.",
+            True,
+        ),
+        "denied": ("Google authorization was denied. You can try again.", False),
+        "cancelled": (
+            "Google authorization timed out or was cancelled. You can try again.",
+            False,
+        ),
+        "callback-error": (
+            "Google authorization callback could not be verified. You can try again.",
+            False,
+        ),
+        "token-error": (
+            "Google could not issue a refresh token. Check the OAuth client "
+            "configuration and try again.",
+            False,
+        ),
+        "storage-error": ("Secure credential storage is unavailable.", False),
+        "not-configured": ("Save the Google Ads settings before authorizing.", False),
+    }
+    return None if oauth_status is None else messages.get(oauth_status)
