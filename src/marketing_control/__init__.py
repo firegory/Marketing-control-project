@@ -1,8 +1,10 @@
-"""Marketing Control package foundation."""
+"""Marketing Control local application."""
 
 __version__ = "0.1.0"
 
 
 def main() -> None:
-    """Run the minimal package entry point."""
-    print("Marketing Control foundation is ready.")
+    """Run the local application server."""
+    from marketing_control.launcher import run_local_server
+
+    run_local_server()
