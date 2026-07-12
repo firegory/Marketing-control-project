@@ -10,6 +10,22 @@
       <h1>Set up Google Ads</h1>
       <p>Configure one Google Ads account, then authorize it in your browser.</p>
       {% if configured %}<p role="status">Google Ads settings are saved. Secrets are not displayed.</p>{% endif %}
+      {% if connection.state == "usable" %}
+      <section aria-labelledby="connection-status">
+        <h2 id="connection-status">Connected</h2>
+        <p role="status">Connected to {{ connection.customer_name }} ({{ connection.customer_id }}).</p>
+        <dl>
+          <dt>Currency</dt><dd>{{ connection.currency_code }}</dd>
+          <dt>Timezone</dt><dd>{{ connection.time_zone }}</dd>
+        </dl>
+      </section>
+      {% elif connection.state == "invalid_authorization" %}
+      <p role="alert">Google authorization is no longer valid. Reauthorize to reconnect this account.</p>
+      {% elif connection.state == "not_configured" and configured %}
+      <p role="status">Google Ads settings need authorization before the connection can be validated.</p>
+      {% elif connection.state == "temporary_failure" %}
+      <p role="alert">Google Ads could not be reached. Try again later.</p>
+      {% endif %}
       {% if oauth_message %}<p role="status">{{ oauth_message[0] }}</p>{% endif %}
       <form method="post" action="/settings/google-ads">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -38,7 +54,7 @@
       {% if configured %}
       <form method="post" action="/settings/google-ads/authorize">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit">Authorize Google Ads</button>
+        <button type="submit">{% if connection.state == "invalid_authorization" %}Reauthorize Google Ads{% else %}Authorize Google Ads{% endif %}</button>
       </form>
       {% endif %}
     </main>

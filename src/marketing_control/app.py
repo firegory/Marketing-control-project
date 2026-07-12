@@ -23,6 +23,10 @@ from marketing_control.google_ads import (
     normalize_customer_id,
     normalize_optional_customer_id,
 )
+from marketing_control.google_ads_adapter import (
+    GoogleAdsConnectionValidator,
+    GoogleAdsSearchStreamAdapter,
+)
 from marketing_control.oauth import (
     DesktopOAuthAuthorizer,
     GoogleDesktopOAuthAuthorizer,
@@ -41,6 +45,7 @@ def create_app(
     settings: Settings | None = None,
     credential_store: CredentialStore | None = None,
     oauth_authorizer: DesktopOAuthAuthorizer | None = None,
+    connection_validator: GoogleAdsConnectionValidator | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
     app = FastAPI(title="Marketing Control", docs_url=None, redoc_url=None)
@@ -51,6 +56,11 @@ def create_app(
     )
     oauth_authorizer = (
         GoogleDesktopOAuthAuthorizer() if oauth_authorizer is None else oauth_authorizer
+    )
+    connection_validator = (
+        GoogleAdsSearchStreamAdapter(metadata_store, credential_store)
+        if connection_validator is None
+        else connection_validator
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -75,6 +85,7 @@ def create_app(
             context={
                 "csrf_token": csrf_token,
                 "configured": metadata_store.load() is not None,
+                "connection": connection_validator.connection_status(),
                 "oauth_message": _oauth_message(oauth_status),
             },
         )
