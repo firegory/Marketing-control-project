@@ -61,6 +61,7 @@ def test_report_coverage_is_separate_for_each_report(settings: Settings) -> None
 
         campaign_coverage = repository.list_coverage("campaign")
         search_term_coverage = repository.list_coverage("search_terms")
+        report_names = repository.list_report_names()
 
     assert [item.covered_start_date for item in campaign_coverage] == [
         date(2026, 1, 1),
@@ -69,6 +70,7 @@ def test_report_coverage_is_separate_for_each_report(settings: Settings) -> None
     assert [item.covered_end_date for item in search_term_coverage] == [
         date(2026, 1, 15)
     ]
+    assert report_names == ["campaign", "search_terms"]
 
 
 def test_history_preference_survives_a_database_restart(settings: Settings) -> None:

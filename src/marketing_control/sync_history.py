@@ -172,6 +172,13 @@ class SyncRepository:
         ).fetchall()
         return [ReportCoverage(*row) for row in rows]
 
+    def list_report_names(self) -> list[str]:
+        """Return every report with stored coverage in a stable display order."""
+        rows = self._connection.execute(
+            "SELECT DISTINCT report_name FROM report_coverage ORDER BY report_name"
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def save_history_preference(
         self,
         kind: HistoryPreferenceKind,
