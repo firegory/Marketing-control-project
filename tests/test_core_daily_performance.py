@@ -10,7 +10,10 @@ from types import SimpleNamespace
 import duckdb
 import pytest
 
-from marketing_control.core_daily_performance import import_core_daily_performance
+from marketing_control.core_daily_performance import (
+    CoreDailyPerformanceImportError,
+    import_core_daily_performance,
+)
 from marketing_control.settings import AppPaths, Settings
 from marketing_control.storage import database_connection
 
@@ -54,21 +57,34 @@ def _result(
 
 
 def _source(
-    *, campaign_results: tuple[object, ...] | None = None, clicks: int = 2
+    *,
+    campaign_results: tuple[object, ...] | None = None,
+    ad_group_results: tuple[object, ...] | None = None,
+    clicks: int = 2,
 ) -> FakeSource:
     campaign = _result(
         "campaign", "customers/1/campaigns/2", "2026-01-02", clicks=clicks
     )
     return FakeSource(
         {
-            "campaign": (_batch(*(campaign_results or (campaign,))),),
+            "campaign": (
+                _batch(
+                    *(campaign_results if campaign_results is not None else (campaign,))
+                ),
+            ),
             "ad_group": (
                 _batch(
-                    _result(
-                        "ad_group",
-                        "customers/1/adGroups/3",
-                        "2026-01-02",
-                        clicks=clicks,
+                    *(
+                        ad_group_results
+                        if ad_group_results is not None
+                        else (
+                            _result(
+                                "ad_group",
+                                "customers/1/adGroups/3",
+                                "2026-01-02",
+                                clicks=clicks,
+                            ),
+                        )
                     )
                 ),
             ),
@@ -216,3 +232,60 @@ def test_failed_campaign_staging_preserves_previously_committed_rows(
             ).fetchall()
             == []
         )
+
+
+def test_empty_response_preserves_existing_grain_data(settings: Settings) -> None:
+    with database_connection(settings) as connection:
+        import_core_daily_performance(
+            connection, _source(), "customers/1", date(2026, 1, 2), date(2026, 1, 2)
+        )
+
+        with pytest.raises(CoreDailyPerformanceImportError, match="refusing to clear"):
+            import_core_daily_performance(
+                connection,
+                _source(campaign_results=()),
+                "customers/1",
+                date(2026, 1, 2),
+                date(2026, 1, 2),
+            )
+
+        assert connection.execute(
+            "SELECT clicks FROM campaign_daily_performance"
+        ).fetchall() == [(2,)]
+
+
+def test_failed_later_grain_preserves_earlier_committed_grains(
+    settings: Settings,
+) -> None:
+    first_ad_group = _result(
+        "ad_group", "customers/1/adGroups/3", "2026-01-02", clicks=2
+    )
+    duplicate_ad_group = _result(
+        "ad_group", "customers/1/adGroups/3", "2026-01-02", clicks=99
+    )
+
+    with database_connection(settings) as connection:
+        import_core_daily_performance(
+            connection, _source(), "customers/1", date(2026, 1, 2), date(2026, 1, 2)
+        )
+
+        with pytest.raises(duckdb.ConstraintException):
+            import_core_daily_performance(
+                connection,
+                _source(
+                    ad_group_results=(first_ad_group, duplicate_ad_group), clicks=20
+                ),
+                "customers/1",
+                date(2026, 1, 2),
+                date(2026, 1, 2),
+            )
+
+        assert connection.execute(
+            "SELECT clicks FROM campaign_daily_performance"
+        ).fetchall() == [(20,)]
+        assert connection.execute(
+            "SELECT clicks FROM ad_group_daily_performance"
+        ).fetchall() == [(2,)]
+        assert connection.execute(
+            "SELECT clicks FROM ad_daily_performance"
+        ).fetchall() == [(2,)]

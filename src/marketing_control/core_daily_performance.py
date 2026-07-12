@@ -102,6 +102,12 @@ def import_core_daily_performance(
             resource_column,
             entity_name,
         )
+        if not rows and _range_row_count(
+            connection, table, customer_resource_name, grain, start_date, end_date
+        ):
+            raise CoreDailyPerformanceImportError(
+                f"Google Ads returned no {grain} rows; refusing to clear existing data."
+            )
         replace_report_range(
             connection,
             table,
@@ -123,13 +129,32 @@ def import_core_daily_performance(
         )
         counts.append(len(rows))
 
-    return CoreDailyPerformanceImportResult(*counts)
+    return CoreDailyPerformanceImportResult(
+        campaign_days=counts[0], ad_group_days=counts[1], ad_days=counts[2]
+    )
 
 
 def _query(template: str, start_date: date, end_date: date) -> str:
     return template.format(
         start_date=start_date.isoformat(), end_date=end_date.isoformat()
     )
+
+
+def _range_row_count(
+    connection: duckdb.DuckDBPyConnection,
+    table: str,
+    customer_resource_name: str,
+    grain: str,
+    start_date: date,
+    end_date: date,
+) -> int:
+    row = connection.execute(
+        f"SELECT count(*) FROM {table} "
+        "WHERE customer_resource_name = ? AND report_grain = ? "
+        "AND report_date BETWEEN ? AND ?",
+        [customer_resource_name, grain, start_date, end_date],
+    ).fetchone()
+    return 0 if row is None else int(row[0])
 
 
 def _parse_daily_rows(
