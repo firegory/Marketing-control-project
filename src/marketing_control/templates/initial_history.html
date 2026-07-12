@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Choose initial history | Marketing Control</title>
+  </head>
+  <body>
+    <main>
+      <h1>Choose initial Google Ads history</h1>
+      <p>Select the reporting dates to prepare for your first sync. This does not start a sync.</p>
+      <p>Google Ads reporting history is available for the most recent 11 years: {{ ads_history_start.isoformat() }} through {{ today.isoformat() }}.</p>
+      {% if saved_preference %}
+      <p role="status">Ready to sync {{ saved_preference.requested_start_date.isoformat() }} through {{ saved_preference.requested_end_date.isoformat() }} ({{ saved_days }} days). No sync has started.</p>
+      {% else %}
+      <p role="status">Choose and save a valid range before the initial sync can be started.</p>
+      {% endif %}
+      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+      <form method="post" action="/sync/initial-history">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <fieldset>
+          <legend>History period</legend>
+          <p><label><input type="radio" name="preset" value="7" {% if form.preset == "7" %}checked{% endif %}> Last 7 days</label></p>
+          <p><label><input type="radio" name="preset" value="30" {% if form.preset == "30" %}checked{% endif %}> Last 30 days</label></p>
+          <p><label><input type="radio" name="preset" value="90" {% if form.preset == "90" %}checked{% endif %}> Last 90 days</label></p>
+          <p><label><input type="radio" name="preset" value="365" {% if form.preset == "365" %}checked{% endif %}> Last 365 days</label></p>
+          <p><label><input type="radio" name="preset" value="maximum" {% if form.preset == "maximum" %}checked{% endif %}> Maximum available history</label></p>
+          <p><label><input type="radio" name="preset" value="custom" {% if form.preset == "custom" %}checked{% endif %}> Custom inclusive dates</label></p>
+        </fieldset>
+        <p><label for="custom_start_date">Start date</label><br><input id="custom_start_date" name="custom_start_date" type="date" value="{{ form.custom_start_date }}"></p>
+        <p><label for="custom_end_date">End date</label><br><input id="custom_end_date" name="custom_end_date" type="date" value="{{ form.custom_end_date }}"></p>
+        <p>The estimated workload is the number of inclusive reporting days in the saved range. Choosing a smaller range later does not delete data already retained locally.</p>
+        <button type="submit">Save initial history choice</button>
+      </form>
+    </main>
+  </body>
+</html>
