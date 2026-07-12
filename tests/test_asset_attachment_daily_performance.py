@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,7 +41,7 @@ def _batch(*results: object) -> SimpleNamespace:
 def _result(
     scope: str,
     *,
-    field_type: str = "SITELINK",
+    field_type: object = "SITELINK",
     clicks: int | None = 2,
     report_date: str = "2026-01-02",
 ) -> SimpleNamespace:
@@ -166,6 +167,31 @@ def test_rejects_unsupported_attachment_type_without_writing_metrics(
         assert connection.execute(
             "SELECT count(*) FROM asset_attachment_daily_performance"
         ).fetchone() == (0,)
+
+
+def test_normalizes_enum_attachment_types_and_integral_float_metrics(
+    settings: Settings,
+) -> None:
+    class FieldType(Enum):
+        SITELINK = "SITELINK"
+
+    campaign = _result("campaign", field_type=FieldType.SITELINK)
+    campaign.metrics.clicks = 2.0
+
+    with database_connection(settings) as connection:
+        result = import_asset_attachment_daily_performance(
+            connection,
+            _source(campaign=(campaign,), ad_group=()),
+            "customers/1",
+            date(2026, 1, 2),
+            date(2026, 1, 2),
+        )
+        row = connection.execute(
+            "SELECT attachment_type, clicks FROM asset_attachment_daily_performance"
+        ).fetchone()
+
+    assert result.attachment_days == 1
+    assert row == ("SITELINK", 2)
 
 
 def test_rejects_missing_metric_instead_of_fabricating_a_value(

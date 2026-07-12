@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, Protocol
+from typing import Protocol
 
 import duckdb
 
@@ -26,15 +26,6 @@ FROM ad_group_asset
 WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'"""
 
 ATTACHMENT_PERFORMANCE_GRAIN = "asset_attachment_day"
-SUPPORTED_ATTACHMENT_METRICS = frozenset(
-    {
-        "impressions",
-        "clicks",
-        "cost_micros",
-        "conversions",
-        "conversions_value",
-    }
-)
 # Google Ads serves these asset field types through the attachment resources above.
 SUPPORTED_ATTACHMENT_TYPES = {
     "campaign": frozenset(
@@ -184,7 +175,7 @@ def _parse_rows(
     rows: list[dict[str, object]] = []
     for result in _results(batches):
         attachment = getattr(result, attachment_name, None)
-        attachment_type = _required_text(attachment, "field_type")
+        attachment_type = _required_attachment_type(attachment)
         _validate_supported_combination(scope, attachment_type)
         metrics = getattr(result, "metrics", None)
         rows.append(
@@ -217,7 +208,7 @@ def _validate_supported_combination(scope: str, attachment_type: str) -> None:
         )
 
 
-def _results(batches: Iterable[object]) -> Iterable[Any]:
+def _results(batches: Iterable[object]) -> Iterable[object]:
     for batch in batches:
         yield from getattr(batch, "results", ())
 
@@ -229,6 +220,11 @@ def _required_text(value: object, name: str) -> str:
             f"Google Ads returned no valid attachment {name}."
         )
     return str(item)
+
+
+def _required_attachment_type(attachment: object) -> str:
+    """Normalize protobuf enum strings to their field-type member names."""
+    return _required_text(attachment, "field_type").rsplit(".", maxsplit=1)[-1]
 
 
 def _required_date(segments: object) -> date:
@@ -246,8 +242,11 @@ def _required_date(segments: object) -> date:
 def _required_int(value: object, name: str) -> int:
     item = getattr(value, name, None)
     try:
-        return int(str(item))
-    except (TypeError, ValueError):
+        number = Decimal(str(item))
+        if number != number.to_integral_value():
+            raise ValueError
+        return int(number)
+    except (InvalidOperation, OverflowError, TypeError, ValueError):
         raise AssetAttachmentPerformanceImportError(
             f"Google Ads returned no valid attachment performance {name}."
         ) from None
