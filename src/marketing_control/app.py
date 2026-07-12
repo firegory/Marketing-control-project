@@ -15,6 +15,7 @@ from marketing_control.credentials import (
     CredentialStoreError,
     create_credential_store,
 )
+from marketing_control.data_history import ReportHistory, data_history
 from marketing_control.google_ads import (
     DEVELOPER_TOKEN_NAME,
     OAUTH_CLIENT_SECRET_NAME,
@@ -44,6 +45,7 @@ from marketing_control.oauth import (
 from marketing_control.settings import Settings
 from marketing_control.storage import database_connection
 from marketing_control.sync_history import HistoryPreference, SyncRepository
+from marketing_control.sync_planning import DateRange
 
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -143,6 +145,83 @@ def create_app(
             )
         return RedirectResponse(
             "/sync/initial-history", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    @app.get("/settings/data-history", response_class=HTMLResponse)
+    def data_history_settings(request: Request) -> HTMLResponse:
+        """Render retained coverage and backfill planning without synchronizing."""
+        with database_connection(settings) as connection:
+            repository = SyncRepository(connection)
+            preference = repository.get_history_preference()
+            requested_range = (
+                DateRange(
+                    preference.requested_start_date, preference.requested_end_date
+                )
+                if preference and preference.kind == "backfill"
+                else None
+            )
+            reports = data_history(repository, requested_range)
+        return _data_history_response(
+            request,
+            today=today(),
+            saved_preference=(
+                preference if preference and preference.kind == "backfill" else None
+            ),
+            reports=reports,
+        )
+
+    @app.post("/settings/data-history", response_class=HTMLResponse)
+    def save_data_history(
+        request: Request,
+        csrf_token: Annotated[str, Form()],
+        preset: Annotated[str, Form()],
+        custom_start_date: Annotated[str, Form()] = "",
+        custom_end_date: Annotated[str, Form()] = "",
+    ) -> Response:
+        """Save a validated backfill preference without deleting or syncing data."""
+        if not hmac.compare_digest(
+            csrf_token, request.cookies.get("data_history_csrf", "")
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        form = {
+            "preset": preset,
+            "custom_start_date": custom_start_date,
+            "custom_end_date": custom_end_date,
+        }
+        current_date = today()
+        try:
+            selection = select_initial_history(
+                cast(HistoryPreset, preset),
+                today=current_date,
+                custom_start_date=(
+                    _parse_date(custom_start_date, "Start date")
+                    if preset == "custom"
+                    else None
+                ),
+                custom_end_date=(
+                    _parse_date(custom_end_date, "End date")
+                    if preset == "custom"
+                    else None
+                ),
+            )
+        except ValueError as error:
+            with database_connection(settings) as connection:
+                reports = data_history(SyncRepository(connection))
+            return _data_history_response(
+                request,
+                today=current_date,
+                reports=reports,
+                error=str(error),
+                form=form,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            )
+
+        with database_connection(settings) as connection:
+            SyncRepository(connection).save_history_preference(
+                "backfill", selection.start_date, selection.end_date
+            )
+        return RedirectResponse(
+            "/settings/data-history", status_code=status.HTTP_303_SEE_OTHER
         )
 
     @app.get("/settings/google-ads", response_class=HTMLResponse)
@@ -302,6 +381,38 @@ def _initial_history_response(
         status_code=status_code,
     )
     response.set_cookie("history_csrf", csrf_token, httponly=True, samesite="strict")
+    return response
+
+
+def _data_history_response(
+    request: Request,
+    *,
+    today: date,
+    reports: list[ReportHistory],
+    saved_preference: HistoryPreference | None = None,
+    error: str | None = None,
+    form: dict[str, str] | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    csrf_token = secrets.token_urlsafe()
+    response = _templates.TemplateResponse(
+        request=request,
+        name="data_history.html",
+        context={
+            "csrf_token": csrf_token,
+            "today": today,
+            "ads_history_start": ads_history_boundary(today),
+            "reports": reports,
+            "saved_preference": saved_preference,
+            "error": error,
+            "form": form
+            or {"preset": "30", "custom_start_date": "", "custom_end_date": ""},
+        },
+        status_code=status_code,
+    )
+    response.set_cookie(
+        "data_history_csrf", csrf_token, httponly=True, samesite="strict"
+    )
     return response
 
 

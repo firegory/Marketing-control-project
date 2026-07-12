@@ -222,6 +222,124 @@ def test_initial_history_route_rejects_missing_or_invalid_csrf(tmp_path: Path) -
     assert response.status_code == 403
 
 
+def test_data_history_route_distinguishes_filters_and_coverage_per_report(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    with database_connection(settings) as connection:
+        repository = SyncRepository(connection)
+        repository.record_coverage("campaign", date(2026, 1, 1), date(2026, 1, 3))
+        repository.record_coverage("campaign", date(2026, 1, 4), date(2026, 1, 5))
+        repository.record_coverage(
+            "search_terms", date(2026, 1, 1), date(2026, 1, 2)
+        )
+    client = TestClient(create_app(settings=settings, today=lambda: date(2026, 1, 10)))
+
+    response = client.get("/settings/data-history")
+
+    assert response.status_code == 200
+    assert (
+        "dashboard viewing filters only change which retained data is shown"
+        in response.text
+    )
+    assert "campaign" in response.text
+    assert "search_terms" in response.text
+    assert "2026-01-01 through 2026-01-05" in response.text
+
+
+def test_data_history_request_persists_backfill_and_shows_report_plans(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    with database_connection(settings) as connection:
+        SyncRepository(connection).record_coverage(
+            "campaign", date(2026, 1, 3), date(2026, 1, 5)
+        )
+    client = TestClient(create_app(settings=settings, today=lambda: date(2026, 1, 10)))
+    page = client.get("/settings/data-history")
+
+    response = client.post(
+        "/settings/data-history",
+        data={
+            "csrf_token": _csrf_token(page.text),
+            "preset": "custom",
+            "custom_start_date": "2026-01-01",
+            "custom_end_date": "2026-01-07",
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        "Additional history is saved for 2026-01-01 through 2026-01-07"
+        in response.text
+    )
+    assert "Planned missing or refresh ranges" in response.text
+    assert "2026-01-01 through 2026-01-02" in response.text
+    assert "2026-01-06 through 2026-01-07" in response.text
+    with database_connection(settings) as connection:
+        preference = SyncRepository(connection).get_history_preference()
+        run_count = connection.execute("SELECT count(*) FROM sync_runs").fetchone()
+    assert preference is not None
+    assert preference.kind == "backfill"
+    assert preference.requested_start_date == date(2026, 1, 1)
+    assert run_count == (0,)
+
+
+def test_smaller_data_history_request_keeps_retained_coverage(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    with database_connection(settings) as connection:
+        SyncRepository(connection).record_coverage(
+            "campaign", date(2026, 1, 1), date(2026, 1, 10)
+        )
+    client = TestClient(create_app(settings=settings, today=lambda: date(2026, 1, 10)))
+    page = client.get("/settings/data-history")
+
+    response = client.post(
+        "/settings/data-history",
+        data={
+            "csrf_token": _csrf_token(page.text),
+            "preset": "7",
+            "custom_start_date": "",
+            "custom_end_date": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Nothing is currently missing for this requested range." in response.text
+    with database_connection(settings) as connection:
+        repository = SyncRepository(connection)
+        coverage = repository.list_coverage("campaign")
+        run_count = connection.execute("SELECT count(*) FROM sync_runs").fetchone()
+    assert [(item.covered_start_date, item.covered_end_date) for item in coverage] == [
+        (date(2026, 1, 1), date(2026, 1, 10))
+    ]
+    assert run_count == (0,)
+
+
+def test_data_history_route_rejects_invalid_dates_and_csrf(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(settings=_settings(tmp_path), today=lambda: date(2026, 1, 10))
+    )
+    page = client.get("/settings/data-history")
+    invalid_dates = client.post(
+        "/settings/data-history",
+        data={
+            "csrf_token": _csrf_token(page.text),
+            "preset": "custom",
+            "custom_start_date": "2026-01-11",
+            "custom_end_date": "2026-01-10",
+        },
+    )
+    invalid_csrf = client.post(
+        "/settings/data-history",
+        data={"csrf_token": "invalid", "preset": "7"},
+    )
+
+    assert invalid_dates.status_code == 422
+    assert "Start date must be on or before end date." in invalid_dates.text
+    assert invalid_csrf.status_code == 403
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         "MarketingControl",
