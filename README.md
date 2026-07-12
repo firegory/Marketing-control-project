@@ -2,6 +2,10 @@
 
 Minimal Python 3.12 foundation for the Marketing Control project.
 
+## Sync orchestration
+
+`ReportTaskRegistry` order is the documented, controlled report order. Tasks are injected by the host and receive only planned `DateRange` values, so the coordinator creates neither network clients nor report queries. Each run persists queued, running, succeeded, failed, or skipped work per report, including timestamps, progress, and bounded redacted diagnostic text. Failures do not prevent later independent tasks; a retry queues only the prior run's failed reports.
+
 ## Local setup
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then create

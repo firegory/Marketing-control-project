@@ -2,6 +2,7 @@
 
 import hmac
 import secrets
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Callable, cast
@@ -45,6 +46,7 @@ from marketing_control.oauth import (
 from marketing_control.settings import Settings
 from marketing_control.storage import database_connection
 from marketing_control.sync_history import HistoryPreference, SyncRepository
+from marketing_control.sync_orchestration import ReportTaskRegistry, SyncRunCoordinator
 from marketing_control.sync_planning import DateRange
 
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -56,6 +58,7 @@ def create_app(
     credential_store: CredentialStore | None = None,
     oauth_authorizer: DesktopOAuthAuthorizer | None = None,
     connection_validator: GoogleAdsConnectionValidator | None = None,
+    report_registry: ReportTaskRegistry | None = None,
     today: Callable[[], date] | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
@@ -74,6 +77,9 @@ def create_app(
         else connection_validator
     )
     today = date.today if today is None else today
+    report_registry = (
+        ReportTaskRegistry(()) if report_registry is None else report_registry
+    )
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> HTMLResponse:
@@ -223,6 +229,68 @@ def create_app(
         return RedirectResponse(
             "/settings/data-history", status_code=status.HTTP_303_SEE_OTHER
         )
+
+    @app.get("/sync/runs", response_class=HTMLResponse)
+    def sync_runs(request: Request) -> HTMLResponse:
+        """Render persisted latest-run progress without initiating any work."""
+        with database_connection(settings) as connection:
+            repository = SyncRepository(connection)
+            run = repository.latest_run()
+            work_items = [] if run is None else repository.list_report_runs(run.id)
+        return _sync_runs_response(request, run, work_items, len(report_registry.tasks))
+
+    @app.post("/sync/runs")
+    def start_sync_run(
+        request: Request, csrf_token: Annotated[str, Form()]
+    ) -> RedirectResponse:
+        """Synchronously start the saved history range through injected report tasks."""
+        _verify_sync_csrf(request, csrf_token)
+        if not report_registry.tasks:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No report tasks are configured.",
+            )
+        with database_connection(settings) as connection:
+            repository = SyncRepository(connection)
+            preference = repository.get_history_preference()
+            if preference is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "Save an initial history or backfill range "
+                        "before starting sync."
+                    ),
+                )
+            try:
+                SyncRunCoordinator(repository, report_registry).start(
+                    DateRange(
+                        preference.requested_start_date, preference.requested_end_date
+                    )
+                )
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=str(error)
+                ) from None
+        return RedirectResponse("/sync/runs", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/sync/runs/{sync_run_id}/retry")
+    def retry_sync_run(
+        request: Request, sync_run_id: str, csrf_token: Annotated[str, Form()]
+    ) -> RedirectResponse:
+        """Synchronously retry only report work that failed in the selected run."""
+        _verify_sync_csrf(request, csrf_token)
+        with database_connection(settings) as connection:
+            try:
+                SyncRunCoordinator(
+                    SyncRepository(connection), report_registry
+                ).retry_failed(sync_run_id)
+            except KeyError:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=str(error)
+                ) from None
+        return RedirectResponse("/sync/runs", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/settings/google-ads", response_class=HTMLResponse)
     def google_ads_settings(
@@ -414,6 +482,29 @@ def _data_history_response(
         "data_history_csrf", csrf_token, httponly=True, samesite="strict"
     )
     return response
+
+
+def _sync_runs_response(
+    request: Request, run: object | None, work_items: Sequence[object], task_count: int
+) -> HTMLResponse:
+    csrf_token = secrets.token_urlsafe()
+    response = _templates.TemplateResponse(
+        request=request,
+        name="sync_runs.html",
+        context={
+            "csrf_token": csrf_token,
+            "run": run,
+            "work_items": work_items,
+            "task_count": task_count,
+        },
+    )
+    response.set_cookie("sync_runs_csrf", csrf_token, httponly=True, samesite="strict")
+    return response
+
+
+def _verify_sync_csrf(request: Request, csrf_token: str) -> None:
+    if not hmac.compare_digest(csrf_token, request.cookies.get("sync_runs_csrf", "")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
 
 def _parse_date(value: str, label: str) -> date | None:

@@ -1,6 +1,7 @@
 """Tests for the local FastAPI shell."""
 
 import re
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from marketing_control.google_ads_adapter import (
 from marketing_control.settings import AppPaths, Settings
 from marketing_control.storage import database_connection
 from marketing_control.sync_history import SyncRepository
+from marketing_control.sync_orchestration import ReportTaskRegistry
+from marketing_control.sync_planning import DateRange
 
 
 class FakeConnectionValidator:
@@ -23,6 +26,13 @@ class FakeConnectionValidator:
 
     def connection_status(self) -> GoogleAdsConnectionStatus:
         return self.status
+
+
+class FakeReportTask:
+    name = "daily"
+
+    def execute(self, ranges: Sequence[DateRange]) -> None:
+        pass
 
 
 def test_root_renders_the_server_side_application_shell() -> None:
@@ -338,6 +348,43 @@ def test_data_history_route_rejects_invalid_dates_and_csrf(tmp_path: Path) -> No
     assert invalid_dates.status_code == 422
     assert "Start date must be on or before end date." in invalid_dates.text
     assert invalid_csrf.status_code == 403
+
+
+def test_sync_progress_route_is_observable_and_start_action_is_csrf_protected(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(settings=_settings(tmp_path)))
+    page = client.get("/sync/runs")
+
+    invalid = client.post("/sync/runs", data={"csrf_token": "invalid"})
+
+    assert page.status_code == 200
+    assert "No sync run has started." in page.text
+    assert invalid.status_code == 403
+    assert "No report tasks are configured" in page.text
+
+
+def test_sync_progress_start_persists_and_displays_report_status(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    with database_connection(settings) as connection:
+        SyncRepository(connection).save_history_preference(
+            "initial", date(2026, 1, 1), date(2026, 1, 1)
+        )
+    client = TestClient(
+        create_app(
+            settings=settings,
+            report_registry=ReportTaskRegistry((FakeReportTask(),)),
+        )
+    )
+    page = client.get("/sync/runs")
+
+    response = client.post("/sync/runs", data={"csrf_token": _csrf_token(page.text)})
+
+    assert response.status_code == 200
+    assert "Status: succeeded." in response.text
+    assert "daily</strong>: succeeded (1/1)" in response.text
 
 
 def _settings(tmp_path: Path) -> Settings:
