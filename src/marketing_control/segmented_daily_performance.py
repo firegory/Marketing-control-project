@@ -147,19 +147,28 @@ def import_segmented_daily_performance(
             _parse_interest_location_rows,
         ),
     )
-    counts: list[int] = []
-    for table, grain, query, parser in imports:
-        rows = parser(
-            source.search_stream(_query(query, start_date, end_date)),
-            customer_resource_name,
+    parsed_imports = [
+        (
+            table,
             grain,
+            parser(
+                source.search_stream(_query(query, start_date, end_date)),
+                customer_resource_name,
+                grain,
+            ),
         )
+        for table, grain, query, parser in imports
+    ]
+    for table, grain, rows in parsed_imports:
         if not rows and _range_row_count(
             connection, table, customer_resource_name, grain, start_date, end_date
         ):
             raise SegmentedDailyPerformanceImportError(
                 f"Google Ads returned no {grain} rows; refusing to clear existing data."
             )
+
+    counts: list[int] = []
+    for table, grain, rows in parsed_imports:
         replace_report_range(
             connection,
             table,

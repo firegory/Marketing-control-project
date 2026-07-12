@@ -240,7 +240,7 @@ def test_empty_response_does_not_clear_existing_location_semantic_grain(
         ):
             import_segmented_daily_performance(
                 connection,
-                _source(presence_results=()),
+                _source(presence_results=(), clicks=20),
                 "customers/1",
                 date(2026, 1, 2),
                 date(2026, 1, 2),
@@ -248,8 +248,50 @@ def test_empty_response_does_not_clear_existing_location_semantic_grain(
 
         assert connection.execute(
             "SELECT report_grain, location_semantics, clicks "
-            "FROM location_daily_performance WHERE report_grain = 'user_presence_day'"
-        ).fetchall() == [("user_presence_day", "user_presence", 2)]
+            "FROM location_daily_performance ORDER BY report_grain"
+        ).fetchall() == [
+            ("location_targeting_day", "targeting", 2),
+            ("user_interest_day", "user_interest", 2),
+            ("user_presence_day", "user_presence", 2),
+        ]
+        assert connection.execute(
+            "SELECT clicks FROM device_daily_performance"
+        ).fetchall() == [(2,)]
+
+
+def test_replacing_location_grain_preserves_other_location_grains(
+    settings: Settings,
+) -> None:
+    updated_presence = SimpleNamespace(
+        campaign=SimpleNamespace(resource_name="customers/1/campaigns/2"),
+        segments=SimpleNamespace(
+            date="2026-01-02",
+            geo_target_most_specific_location="geoTargetConstants/1000",
+        ),
+        metrics=_metrics(clicks=20),
+    )
+    with database_connection(settings) as connection:
+        import_segmented_daily_performance(
+            connection, _source(), "customers/1", date(2026, 1, 2), date(2026, 1, 2)
+        )
+        import_segmented_daily_performance(
+            connection,
+            _source(presence_results=(updated_presence,)),
+            "customers/1",
+            date(2026, 1, 2),
+            date(2026, 1, 2),
+        )
+
+        rows = connection.execute(
+            "SELECT report_grain, clicks FROM location_daily_performance "
+            "ORDER BY report_grain"
+        ).fetchall()
+
+    assert rows == [
+        ("location_targeting_day", 2),
+        ("user_interest_day", 2),
+        ("user_presence_day", 20),
+    ]
 
 
 def test_failed_staging_rolls_back_the_requested_grain_and_cleans_up(
