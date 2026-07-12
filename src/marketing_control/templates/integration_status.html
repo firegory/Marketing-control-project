@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Integration Status | Marketing Control</title></head>
+<body><main>
+  <h1>Google Ads Integration Status</h1>
+  <p>Reference date: {{ status.account_date.isoformat() }} ({{ status.account_time_zone }}).</p>
+  <section><h2>Connection</h2>
+    <p>Status: <strong>{{ status.connection.state }}</strong>.</p>
+    {% if status.connection.customer_name %}<p>Account: {{ status.connection.customer_name }} ({{ status.connection.customer_id }}).</p>{% elif status.connection.customer_id or status.configured_customer_id %}<p>Account ID: {{ status.connection.customer_id or status.configured_customer_id }}.</p>{% else %}<p>No Google Ads account is configured.</p>{% endif %}
+    {% if status.connection.state != 'usable' %}<p><a href="/settings/google-ads">Review Google Ads connection settings</a>.</p>{% endif %}
+  </section>
+  <section><h2>Latest sync</h2>
+    {% if status.latest_run %}<p>Outcome: <strong>{{ status.latest_run.status }}</strong>. Time: {{ status.latest_run_time.isoformat() }}.</p>{% if status.latest_run.status == 'failed' %}<p><a href="/sync/runs">Review sync diagnostics and progress</a>.</p>{% endif %}{% else %}<p>No sync has started.</p>{% endif %}
+  </section>
+  <section><h2>Report coverage</h2>
+    {% if status.reports %}<ul>{% for report in status.reports %}<li><strong>{{ report.report_name }}</strong>: <strong>{{ report.state }}</strong>. Coverage: {% if report.coverage %}{% for range in report.coverage %}{{ range.start_date.isoformat() }} through {{ range.end_date.isoformat() }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}none{% endif %}.{% if report.latest_work %} Latest work: {{ report.latest_work.status }} ({{ report.latest_work.completed_units }}/{{ report.latest_work.total_units }}).{% endif %}{% if report.state == 'failed' %} <a href="/sync/runs">Review diagnostics and progress</a>.{% endif %}</li>{% endfor %}</ul>{% else %}<p>No reports are configured or imported.</p>{% endif %}
+  </section>
+</main></body></html>
