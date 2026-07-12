@@ -3,7 +3,7 @@
 import hmac
 import secrets
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Callable, cast
 
@@ -35,6 +35,7 @@ from marketing_control.initial_history import (
     ads_history_boundary,
     select_initial_history,
 )
+from marketing_control.integration_status import integration_status
 from marketing_control.oauth import (
     DesktopOAuthAuthorizer,
     GoogleDesktopOAuthAuthorizer,
@@ -60,6 +61,7 @@ def create_app(
     connection_validator: GoogleAdsConnectionValidator | None = None,
     report_registry: ReportTaskRegistry | None = None,
     today: Callable[[], date] | None = None,
+    now: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
     app = FastAPI(title="Marketing Control", docs_url=None, redoc_url=None)
@@ -77,6 +79,7 @@ def create_app(
         else connection_validator
     )
     today = date.today if today is None else today
+    now = (lambda: datetime.now(UTC)) if now is None else now
     report_registry = (
         ReportTaskRegistry(()) if report_registry is None else report_registry
     )
@@ -238,6 +241,39 @@ def create_app(
             run = repository.latest_run()
             work_items = [] if run is None else repository.list_report_runs(run.id)
         return _sync_runs_response(request, run, work_items, len(report_registry.tasks))
+
+    @app.get("/integration-status", response_class=HTMLResponse)
+    def integration_status_page(request: Request) -> HTMLResponse:
+        """Render local connection, sync, and per-report coverage status."""
+        connection = connection_validator.connection_status()
+        configured = metadata_store.load()
+        with database_connection(settings) as database:
+            repository = SyncRepository(database)
+            latest_run = repository.latest_run()
+            latest_work = (
+                [] if latest_run is None else repository.list_report_runs(latest_run.id)
+            )
+            coverage_by_report = {
+                name: repository.list_coverage(name)
+                for name in repository.list_report_names()
+            }
+        return _templates.TemplateResponse(
+            request=request,
+            name="integration_status.html",
+            context={
+                "status": integration_status(
+                    connection=connection,
+                    configured_customer_id=(
+                        configured.customer_id if configured is not None else None
+                    ),
+                    latest_run=latest_run,
+                    latest_work=latest_work,
+                    coverage_by_report=coverage_by_report,
+                    registry=report_registry,
+                    now=now(),
+                )
+            },
+        )
 
     @app.post("/sync/runs")
     def start_sync_run(
