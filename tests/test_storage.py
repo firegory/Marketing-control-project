@@ -48,6 +48,7 @@ def test_first_run_creates_migrated_database_in_configured_data_directory(
         ("0007",),
         ("0008",),
         ("0009",),
+        ("0010",),
     ]
 
 
@@ -65,7 +66,7 @@ def test_restart_does_not_reapply_migrations(settings: Settings) -> None:
             "SELECT applied_at FROM schema_migrations WHERE version = '0001'"
         ).fetchone()
 
-    assert migration_count == (9,)
+    assert migration_count == (10,)
     assert second_applied_at == first_applied_at
 
 

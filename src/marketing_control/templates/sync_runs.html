@@ -4,6 +4,7 @@
   <h1>Sync Progress</h1>
   <p>Reports run in configured registry order. A failed report does not stop later independent reports.</p>
   {% if run %}<section><h2>Latest run</h2><p>Status: {{ run.status }}. Requested {{ run.requested_start_date.isoformat() }} through {{ run.requested_end_date.isoformat() }}.</p><ul>{% for work in work_items %}<li><strong>{{ work.report_name }}</strong>: {{ work.status }} ({{ work.completed_units }}/{{ work.total_units }}){% if work.failure_detail %} - {{ work.failure_detail }}{% endif %}</li>{% endfor %}</ul></section>{% else %}<p role="status">No sync run has started.</p>{% endif %}
-  {% if task_count %}<form method="post" action="/sync/runs"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Start sync</button></form>{% else %}<p>No report tasks are configured for this application instance.</p>{% endif %}
+  {% if task_count %}<form method="post" action="/sync/runs"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Refresh now</button></form>{% else %}<p>No report tasks are configured for this application instance.</p>{% endif %}
+  <form method="post" action="/sync/startup-refresh"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label><input type="checkbox" name="enabled" value="true"{% if startup_refresh_enabled %} checked{% endif %}> Refresh once when the app starts, per local account day</label><button type="submit">Save startup refresh setting</button></form>
   {% if run and run.status == 'failed' %}<form method="post" action="/sync/runs/{{ run.id }}/retry"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Retry failed reports</button></form>{% endif %}
 </main></body></html>
