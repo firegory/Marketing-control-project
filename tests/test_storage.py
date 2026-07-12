@@ -170,10 +170,13 @@ def test_replace_report_range_rejects_out_of_scope_rows_and_cleans_staging() -> 
     assert connection.execute("SELECT * FROM reports").fetchall() == [
         ("account-a", "daily", date(2026, 1, 2), 20)
     ]
-    assert connection.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_name LIKE '_staging_%'"
-    ).fetchall() == []
+    assert (
+        connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name LIKE '_staging_%'"
+        ).fetchall()
+        == []
+    )
 
 
 def test_replace_report_range_rolls_back_delete_when_committed_insert_fails() -> None:
@@ -205,10 +208,13 @@ def test_replace_report_range_rolls_back_delete_when_committed_insert_fails() ->
     assert connection.execute("SELECT * FROM reports").fetchall() == [
         ("account-a", "daily", date(2026, 1, 2), 20)
     ]
-    assert connection.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_name LIKE '_staging_%'"
-    ).fetchall() == []
+    assert (
+        connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name LIKE '_staging_%'"
+        ).fetchall()
+        == []
+    )
 
 
 def test_replace_report_range_is_idempotent_for_identical_retries() -> None:
