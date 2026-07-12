@@ -2,11 +2,12 @@
 
 import hmac
 import secrets
+from datetime import date
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable, cast
 
 from fastapi import FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from marketing_control.credentials import (
@@ -27,6 +28,11 @@ from marketing_control.google_ads_adapter import (
     GoogleAdsConnectionValidator,
     GoogleAdsSearchStreamAdapter,
 )
+from marketing_control.initial_history import (
+    HistoryPreset,
+    ads_history_boundary,
+    select_initial_history,
+)
 from marketing_control.oauth import (
     DesktopOAuthAuthorizer,
     GoogleDesktopOAuthAuthorizer,
@@ -36,6 +42,8 @@ from marketing_control.oauth import (
     OAuthTokenExchangeError,
 )
 from marketing_control.settings import Settings
+from marketing_control.storage import database_connection
+from marketing_control.sync_history import HistoryPreference, SyncRepository
 
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -46,6 +54,7 @@ def create_app(
     credential_store: CredentialStore | None = None,
     oauth_authorizer: DesktopOAuthAuthorizer | None = None,
     connection_validator: GoogleAdsConnectionValidator | None = None,
+    today: Callable[[], date] | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
     app = FastAPI(title="Marketing Control", docs_url=None, redoc_url=None)
@@ -62,6 +71,7 @@ def create_app(
         if connection_validator is None
         else connection_validator
     )
+    today = date.today if today is None else today
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> HTMLResponse:
@@ -72,6 +82,68 @@ def create_app(
     def health() -> dict[str, str]:
         """Report that the local process can serve requests."""
         return {"status": "ok"}
+
+    @app.get("/sync/initial-history", response_class=HTMLResponse)
+    def initial_history(request: Request) -> HTMLResponse:
+        """Render the pre-sync initial-history selection screen."""
+        with database_connection(settings) as connection:
+            preference = SyncRepository(connection).get_history_preference()
+        return _initial_history_response(
+            request,
+            today=today(),
+            saved_preference=preference
+            if preference and preference.kind == "initial"
+            else None,
+        )
+
+    @app.post("/sync/initial-history", response_class=HTMLResponse)
+    def save_initial_history(
+        request: Request,
+        csrf_token: Annotated[str, Form()],
+        preset: Annotated[str, Form()],
+        custom_start_date: Annotated[str, Form()] = "",
+        custom_end_date: Annotated[str, Form()] = "",
+    ) -> Response:
+        """Persist a valid initial range without starting synchronization."""
+        if not hmac.compare_digest(csrf_token, request.cookies.get("history_csrf", "")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        form = {
+            "preset": preset,
+            "custom_start_date": custom_start_date,
+            "custom_end_date": custom_end_date,
+        }
+        current_date = today()
+        try:
+            selection = select_initial_history(
+                cast(HistoryPreset, preset),
+                today=current_date,
+                custom_start_date=(
+                    _parse_date(custom_start_date, "Start date")
+                    if preset == "custom"
+                    else None
+                ),
+                custom_end_date=(
+                    _parse_date(custom_end_date, "End date")
+                    if preset == "custom"
+                    else None
+                ),
+            )
+        except ValueError as error:
+            return _initial_history_response(
+                request,
+                today=current_date,
+                error=str(error),
+                form=form,
+                status_code=422,
+            )
+
+        with database_connection(settings) as connection:
+            SyncRepository(connection).save_history_preference(
+                "initial", selection.start_date, selection.end_date
+            )
+        return RedirectResponse(
+            "/sync/initial-history", status_code=status.HTTP_303_SEE_OTHER
+        )
 
     @app.get("/settings/google-ads", response_class=HTMLResponse)
     def google_ads_settings(
@@ -194,6 +266,52 @@ def _oauth_redirect(oauth_status: str) -> RedirectResponse:
         f"/settings/google-ads?oauth_status={oauth_status}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+def _initial_history_response(
+    request: Request,
+    *,
+    today: date,
+    saved_preference: HistoryPreference | None = None,
+    error: str | None = None,
+    form: dict[str, str] | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    csrf_token = secrets.token_urlsafe()
+    response = _templates.TemplateResponse(
+        request=request,
+        name="initial_history.html",
+        context={
+            "csrf_token": csrf_token,
+            "today": today,
+            "ads_history_start": ads_history_boundary(today),
+            "saved_preference": saved_preference,
+            "saved_days": (
+                (
+                    saved_preference.requested_end_date
+                    - saved_preference.requested_start_date
+                ).days
+                + 1
+                if saved_preference
+                else None
+            ),
+            "error": error,
+            "form": form
+            or {"preset": "30", "custom_start_date": "", "custom_end_date": ""},
+        },
+        status_code=status_code,
+    )
+    response.set_cookie("history_csrf", csrf_token, httponly=True, samesite="strict")
+    return response
+
+
+def _parse_date(value: str, label: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{label} must be a valid date.") from None
 
 
 def _oauth_message(oauth_status: str | None) -> tuple[str, bool] | None:
