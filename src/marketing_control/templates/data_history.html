@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Data History | Marketing Control</title>
+  </head>
+  <body>
+    <main>
+      <h1>Data History</h1>
+      <p>Your dashboard viewing filters only change which retained data is shown. They do not change the coverage retained locally.</p>
+      <p>Stored coverage is tracked independently for each report. Overlapping and adjacent stored intervals are shown as one retained range.</p>
+      {% if reports %}
+        {% for report in reports %}
+        <section aria-labelledby="report-{{ loop.index }}">
+          <h2 id="report-{{ loop.index }}">{{ report.report_name }}</h2>
+          <h3>Retained coverage</h3>
+          <ul>
+            {% for interval in report.retained_ranges %}
+            <li>{{ interval.start_date.isoformat() }} through {{ interval.end_date.isoformat() }}</li>
+            {% endfor %}
+          </ul>
+          {% if saved_preference %}
+          <h3>Planned missing or refresh ranges</h3>
+          {% if report.planned_ranges %}
+          <ul>
+            {% for interval in report.planned_ranges %}
+            <li>{{ interval.start_date.isoformat() }} through {{ interval.end_date.isoformat() }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p>Nothing is currently missing for this requested range.</p>
+          {% endif %}
+          {% endif %}
+        </section>
+        {% endfor %}
+      {% else %}
+      <p role="status">No report coverage has been retained yet.</p>
+      {% endif %}
+      {% if saved_preference %}
+      <p role="status">Additional history is saved for {{ saved_preference.requested_start_date.isoformat() }} through {{ saved_preference.requested_end_date.isoformat() }}. No sync has started.</p>
+      {% endif %}
+      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+      <h2>Request additional history</h2>
+      <p>Google Ads reporting history is available from {{ ads_history_start.isoformat() }} through {{ today.isoformat() }}. Saving a smaller range never deletes retained data or starts a sync.</p>
+      <form method="post" action="/settings/data-history">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <fieldset>
+          <legend>Additional history period</legend>
+          <p><label><input type="radio" name="preset" value="7" {% if form.preset == "7" %}checked{% endif %}> Last 7 days</label></p>
+          <p><label><input type="radio" name="preset" value="30" {% if form.preset == "30" %}checked{% endif %}> Last 30 days</label></p>
+          <p><label><input type="radio" name="preset" value="90" {% if form.preset == "90" %}checked{% endif %}> Last 90 days</label></p>
+          <p><label><input type="radio" name="preset" value="365" {% if form.preset == "365" %}checked{% endif %}> Last 365 days</label></p>
+          <p><label><input type="radio" name="preset" value="maximum" {% if form.preset == "maximum" %}checked{% endif %}> Maximum available history</label></p>
+          <p><label><input type="radio" name="preset" value="custom" {% if form.preset == "custom" %}checked{% endif %}> Custom inclusive dates</label></p>
+        </fieldset>
+        <p><label for="custom_start_date">Start date</label><br><input id="custom_start_date" name="custom_start_date" type="date" value="{{ form.custom_start_date }}"></p>
+        <p><label for="custom_end_date">End date</label><br><input id="custom_end_date" name="custom_end_date" type="date" value="{{ form.custom_end_date }}"></p>
+        <button type="submit">Save additional history request</button>
+      </form>
+    </main>
+  </body>
+</html>
