@@ -35,6 +35,14 @@ def test_first_run_creates_migrated_database_in_configured_data_directory(
         applied_versions = connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
+        diagnostics_column = connection.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'sync_report_runs' AND column_name = 'failure_category'"
+        ).fetchone()
+        retry_audit_table = connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'sync_retry_audits'"
+        ).fetchone()
 
     assert path == settings.paths.data / DATABASE_FILENAME
     assert path.is_file()
@@ -48,7 +56,10 @@ def test_first_run_creates_migrated_database_in_configured_data_directory(
         ("0007",),
         ("0008",),
         ("0009",),
+        ("0011",),
     ]
+    assert diagnostics_column == ("failure_category",)
+    assert retry_audit_table == ("sync_retry_audits",)
 
 
 def test_restart_does_not_reapply_migrations(settings: Settings) -> None:
@@ -65,7 +76,7 @@ def test_restart_does_not_reapply_migrations(settings: Settings) -> None:
             "SELECT applied_at FROM schema_migrations WHERE version = '0001'"
         ).fetchone()
 
-    assert migration_count == (9,)
+    assert migration_count == (10,)
     assert second_applied_at == first_applied_at
 
 

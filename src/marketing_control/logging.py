@@ -14,8 +14,10 @@ from marketing_control.settings import Settings
 _SENSITIVE_VALUE = re.compile(
     r"""(?ix)
     (?P<key>
-        (?:client[ _-]?)?secret | password | (?:oauth[ _-]?)?token |
-        developer[ _-]?token | credential | authorization | api[ _-]?key
+        (?:client|customer)[ _-]?secret | secret | password |
+        (?:oauth[ _-]?)?token | refresh[ _-]?token | access[ _-]?token |
+        developer[ _-]?token | credential | authorization | api[ _-]?key |
+        (?:oauth[ _-]?)?code | code
     )
     (?P<key_quote>[\"']?)
     (?P<separator>\s*(?:=|:)\s*|\s+)
@@ -33,6 +35,32 @@ def redact_sensitive_values(value: str) -> str:
         ),
         value,
     )
+
+
+def diagnostic_log_excerpt(
+    log_directory: Path, terms: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Return a small redacted subset of current rotating logs, if readable."""
+    normalized_terms = tuple(term.casefold() for term in terms if term)
+    excerpts: list[str] = []
+    paths = (
+        log_directory / "marketing-control.log",
+        *sorted(log_directory.glob("marketing-control.log.*")),
+    )
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            if normalized_terms and not any(
+                term in line.casefold() for term in normalized_terms
+            ):
+                continue
+            excerpts.append(redact_sensitive_values(line)[:500])
+            if len(excerpts) == 20:
+                return tuple(excerpts)
+    return tuple(excerpts)
 
 
 class RedactingFormatter(logging.Formatter):

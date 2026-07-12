@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sync Diagnostics | Marketing Control</title></head>
+<body><main>
+  <h1>Sync Diagnostics</h1>
+  <p>Failure details and excerpts are redacted and limited. This local view is not analytics.</p>
+  {% if failed_runs %}
+    {% for failed in failed_runs %}
+      <section>
+        <h2>Failed run {{ failed.run.id }}</h2>
+        <p>Requested {{ failed.run.requested_start_date.isoformat() }} through {{ failed.run.requested_end_date.isoformat() }}.</p>
+        <ul>
+          {% for report in failed.reports %}
+            <li><strong>{{ report.report_name }}</strong>: {{ report.failure_category }}{% if report.failure_detail %} - {{ report.failure_detail }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/sync/runs/{{ failed.run.id }}/retry"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Retry failed reports</button></form>
+        {% if failed.retry_audits %}<h3>Retry audit</h3><ul>{% for audit in failed.retry_audits %}<li>{{ audit.outcome }}: {{ audit.report_names|join(', ') }}{% if audit.retry_sync_run_id %} (run {{ audit.retry_sync_run_id }}){% endif %}</li>{% endfor %}</ul>{% endif %}
+      </section>
+    {% endfor %}
+    <section><h2>Relevant log excerpts</h2>{% if log_excerpt %}<pre>{% for line in log_excerpt %}{{ line }}
+{% endfor %}</pre>{% else %}<p>No readable relevant log excerpts are available.</p>{% endif %}</section>
+  {% else %}<p role="status">No failed sync runs are available for diagnosis.</p>{% endif %}
+</main></body></html>

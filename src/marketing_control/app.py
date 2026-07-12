@@ -3,6 +3,7 @@
 import hmac
 import secrets
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Callable, cast
@@ -35,6 +36,7 @@ from marketing_control.initial_history import (
     ads_history_boundary,
     select_initial_history,
 )
+from marketing_control.logging import diagnostic_log_excerpt
 from marketing_control.oauth import (
     DesktopOAuthAuthorizer,
     GoogleDesktopOAuthAuthorizer,
@@ -45,11 +47,26 @@ from marketing_control.oauth import (
 )
 from marketing_control.settings import Settings
 from marketing_control.storage import database_connection
-from marketing_control.sync_history import HistoryPreference, SyncRepository
+from marketing_control.sync_history import (
+    HistoryPreference,
+    SyncReportRun,
+    SyncRepository,
+    SyncRetryAudit,
+    SyncRun,
+)
 from marketing_control.sync_orchestration import ReportTaskRegistry, SyncRunCoordinator
 from marketing_control.sync_planning import DateRange
 
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@dataclass(frozen=True)
+class _FailedRunDiagnostics:
+    """View model for local failure diagnosis, separate from analytics data."""
+
+    run: SyncRun
+    reports: tuple[SyncReportRun, ...]
+    retry_audits: tuple[SyncRetryAudit, ...]
 
 
 def create_app(
@@ -292,6 +309,34 @@ def create_app(
                 ) from None
         return RedirectResponse("/sync/runs", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.get("/sync/diagnostics", response_class=HTMLResponse)
+    def sync_diagnostics(request: Request) -> HTMLResponse:
+        """Render bounded, redacted local diagnostics for persisted failed work."""
+        with database_connection(settings) as connection:
+            repository = SyncRepository(connection)
+            failed_runs = tuple(
+                _FailedRunDiagnostics(
+                    run,
+                    tuple(
+                        work
+                        for work in repository.list_report_runs(run.id)
+                        if work.status == "failed"
+                    ),
+                    tuple(repository.list_retry_audits(run.id)),
+                )
+                for run in repository.list_failed_runs()
+            )
+        terms = tuple(
+            term
+            for failed in failed_runs
+            for term in (failed.run.id, *(work.report_name for work in failed.reports))
+        )
+        return _sync_diagnostics_response(
+            request,
+            failed_runs,
+            diagnostic_log_excerpt(settings.paths.logs, terms),
+        )
+
     @app.get("/settings/google-ads", response_class=HTMLResponse)
     def google_ads_settings(
         request: Request, oauth_status: str | None = None
@@ -496,6 +541,25 @@ def _sync_runs_response(
             "run": run,
             "work_items": work_items,
             "task_count": task_count,
+        },
+    )
+    response.set_cookie("sync_runs_csrf", csrf_token, httponly=True, samesite="strict")
+    return response
+
+
+def _sync_diagnostics_response(
+    request: Request,
+    failed_runs: tuple[_FailedRunDiagnostics, ...],
+    log_excerpt: tuple[str, ...],
+) -> HTMLResponse:
+    csrf_token = secrets.token_urlsafe()
+    response = _templates.TemplateResponse(
+        request=request,
+        name="sync_diagnostics.html",
+        context={
+            "csrf_token": csrf_token,
+            "failed_runs": failed_runs,
+            "log_excerpt": log_excerpt,
         },
     )
     response.set_cookie("sync_runs_csrf", csrf_token, httponly=True, samesite="strict")

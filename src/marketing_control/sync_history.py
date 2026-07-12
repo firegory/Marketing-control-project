@@ -10,11 +10,15 @@ from uuid import uuid4
 import duckdb
 
 from marketing_control.logging import redact_sensitive_values
+from marketing_control.sync_diagnostics import FailureCategory
 
 SyncStatus = Literal["running", "succeeded", "failed"]
 ReportRunStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
 HistoryPreferenceKind = Literal["initial", "backfill"]
 _MAX_FAILURE_DETAIL_LENGTH = 1_000
+_FAILURE_CATEGORIES = frozenset(
+    {"authentication", "api", "range", "storage", "unexpected"}
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,20 @@ class SyncReportRun:
     started_at: datetime | None
     ended_at: datetime | None
     failure_detail: str | None
+    failure_category: FailureCategory | None
+
+
+@dataclass(frozen=True)
+class SyncRetryAudit:
+    """A durable record of a failed-only retry request and its result."""
+
+    id: str
+    source_sync_run_id: str
+    retry_sync_run_id: str | None
+    outcome: Literal["running", "succeeded", "failed"]
+    requested_at: datetime
+    completed_at: datetime | None
+    report_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -128,7 +146,9 @@ class SyncRepository:
             )
             for name in report_names:
                 self._connection.execute(
-                    "INSERT INTO sync_report_runs VALUES "
+                    "INSERT INTO sync_report_runs "
+                    "(sync_run_id, report_name, status, total_units, completed_units, "
+                    "started_at, ended_at, failure_detail) VALUES "
                     "(?, ?, 'queued', 0, 0, NULL, NULL, NULL)",
                     [run.id, name],
                 )
@@ -161,20 +181,26 @@ class SyncRepository:
             report_name,
             "running",
             "status = 'succeeded', completed_units = ?, ended_at = ?, "
-            "failure_detail = NULL",
+            "failure_detail = NULL, failure_category = NULL",
             [completed_units, _now()],
         )
 
     def fail_report_run(
-        self, sync_run_id: str, report_name: str, failure_detail: str
+        self,
+        sync_run_id: str,
+        report_name: str,
+        failure_detail: str,
+        failure_category: FailureCategory,
     ) -> None:
         """Fail running report work with display-safe diagnostic text."""
+        if failure_category not in _FAILURE_CATEGORIES:
+            raise ValueError("failure_category is not supported")
         self._update_report_run(
             sync_run_id,
             report_name,
             "running",
-            "status = 'failed', ended_at = ?, failure_detail = ?",
-            [_now(), _safe_failure_detail(failure_detail)],
+            "status = 'failed', ended_at = ?, failure_detail = ?, failure_category = ?",
+            [_now(), _safe_failure_detail(failure_detail), failure_category],
         )
 
     def skip_report_run(self, sync_run_id: str, report_name: str) -> None:
@@ -194,6 +220,85 @@ class SyncRepository:
             [sync_run_id],
         ).fetchall()
         return [SyncReportRun(*row) for row in rows]
+
+    def list_failed_runs(self, limit: int = 20) -> list[SyncRun]:
+        """Return a bounded newest-first history of failed runs for diagnostics."""
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        rows = self._connection.execute(
+            "SELECT * FROM sync_runs WHERE status = 'failed' "
+            "ORDER BY started_at DESC, id DESC LIMIT ?",
+            [limit],
+        ).fetchall()
+        return [SyncRun(*row) for row in rows]
+
+    def start_retry_audit(
+        self, source_sync_run_id: str, report_names: tuple[str, ...]
+    ) -> SyncRetryAudit:
+        """Persist the source run and exact failed report set before retrying it."""
+        if not report_names or len(report_names) != len(set(report_names)):
+            raise ValueError("retry audit requires unique failed report names")
+        audit = SyncRetryAudit(
+            str(uuid4()),
+            source_sync_run_id,
+            None,
+            "running",
+            _now(),
+            None,
+            report_names,
+        )
+        self._connection.execute(
+            "INSERT INTO sync_retry_audits VALUES (?, ?, NULL, 'running', ?, NULL)",
+            [audit.id, audit.source_sync_run_id, audit.requested_at],
+        )
+        self._connection.executemany(
+            "INSERT INTO sync_retry_audit_reports VALUES (?, ?)",
+            [(audit.id, report_name) for report_name in report_names],
+        )
+        return audit
+
+    def finish_retry_audit(
+        self,
+        audit_id: str,
+        retry_sync_run_id: str | None,
+        outcome: Literal["succeeded", "failed"],
+    ) -> None:
+        """Record the retry run and terminal outcome without changing source history."""
+        row = self._connection.execute(
+            "UPDATE sync_retry_audits SET retry_sync_run_id = ?, outcome = ?, "
+            "completed_at = ? WHERE id = ? AND outcome = 'running' RETURNING id",
+            [retry_sync_run_id, outcome, _now(), audit_id],
+        ).fetchone()
+        if row is None:
+            raise ValueError("retry audit is not running")
+
+    def list_retry_audits(self, source_sync_run_id: str) -> list[SyncRetryAudit]:
+        """Return audit records with their persisted source report sets."""
+        rows = self._connection.execute(
+            "SELECT id, source_sync_run_id, retry_sync_run_id, outcome, requested_at, "
+            "completed_at FROM sync_retry_audits WHERE source_sync_run_id = ? "
+            "ORDER BY requested_at DESC, id DESC",
+            [source_sync_run_id],
+        ).fetchall()
+        return [
+            SyncRetryAudit(
+                id=row[0],
+                source_sync_run_id=row[1],
+                retry_sync_run_id=row[2],
+                outcome=row[3],
+                requested_at=row[4],
+                completed_at=row[5],
+                report_names=tuple(
+                    item[0]
+                    for item in self._connection.execute(
+                        "SELECT report_name FROM sync_retry_audit_reports "
+                        "WHERE retry_audit_id = ? ORDER BY report_name",
+                        [row[0]],
+                    ).fetchall()
+                ),
+            )
+            for row in rows
+        ]
 
     def latest_run(self) -> SyncRun | None:
         """Return the most recently started run, if any."""
