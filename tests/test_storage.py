@@ -38,7 +38,13 @@ def test_first_run_creates_migrated_database_in_configured_data_directory(
 
     assert path == settings.paths.data / DATABASE_FILENAME
     assert path.is_file()
-    assert applied_versions == [("0001",), ("0002",), ("0003",), ("0004",)]
+    assert applied_versions == [
+        ("0001",),
+        ("0002",),
+        ("0003",),
+        ("0004",),
+        ("0005",),
+    ]
 
 
 def test_restart_does_not_reapply_migrations(settings: Settings) -> None:
@@ -55,7 +61,7 @@ def test_restart_does_not_reapply_migrations(settings: Settings) -> None:
             "SELECT applied_at FROM schema_migrations WHERE version = '0001'"
         ).fetchone()
 
-    assert migration_count == (4,)
+    assert migration_count == (5,)
     assert second_applied_at == first_applied_at
 
 
@@ -164,10 +170,13 @@ def test_replace_report_range_rejects_out_of_scope_rows_and_cleans_staging() -> 
     assert connection.execute("SELECT * FROM reports").fetchall() == [
         ("account-a", "daily", date(2026, 1, 2), 20)
     ]
-    assert connection.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_name LIKE '_staging_%'"
-    ).fetchall() == []
+    assert (
+        connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name LIKE '_staging_%'"
+        ).fetchall()
+        == []
+    )
 
 
 def test_replace_report_range_rolls_back_delete_when_committed_insert_fails() -> None:
@@ -199,10 +208,13 @@ def test_replace_report_range_rolls_back_delete_when_committed_insert_fails() ->
     assert connection.execute("SELECT * FROM reports").fetchall() == [
         ("account-a", "daily", date(2026, 1, 2), 20)
     ]
-    assert connection.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_name LIKE '_staging_%'"
-    ).fetchall() == []
+    assert (
+        connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name LIKE '_staging_%'"
+        ).fetchall()
+        == []
+    )
 
 
 def test_replace_report_range_is_idempotent_for_identical_retries() -> None:
