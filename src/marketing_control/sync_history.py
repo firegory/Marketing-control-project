@@ -15,6 +15,7 @@ from marketing_control.sync_diagnostics import FailureCategory
 SyncStatus = Literal["running", "succeeded", "failed"]
 ReportRunStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
 HistoryPreferenceKind = Literal["initial", "backfill"]
+StartupRefreshStatus = Literal["attempted", "succeeded", "failed"]
 _MAX_FAILURE_DETAIL_LENGTH = 1_000
 _FAILURE_CATEGORIES = frozenset(
     {"authentication", "api", "range", "storage", "unexpected"}
@@ -83,6 +84,18 @@ class HistoryPreference:
     requested_start_date: date
     requested_end_date: date
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class StartupRefreshOutcome:
+    """The single startup-refresh attempt reserved for an account's local day."""
+
+    account_id: str
+    local_date: date
+    status: StartupRefreshStatus
+    attempted_at: datetime
+    completed_at: datetime | None
+    failure_detail: str | None
 
 
 class SyncRepository:
@@ -460,6 +473,82 @@ class SyncRepository:
         """Return the latest selected history range, if the user has chosen one."""
         row = self._connection.execute("SELECT * FROM history_preferences").fetchone()
         return None if row is None else HistoryPreference(*row[1:])
+
+    def startup_refresh_enabled(self) -> bool:
+        """Return whether the user opted into startup refreshes."""
+        row = self._connection.execute(
+            "SELECT startup_refresh_enabled FROM refresh_preferences WHERE id = 1"
+        ).fetchone()
+        return False if row is None else bool(row[0])
+
+    def save_startup_refresh_enabled(self, enabled: bool) -> None:
+        """Persist the startup-refresh opt-in state."""
+        self._connection.execute(
+            """
+            INSERT INTO refresh_preferences VALUES (1, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                startup_refresh_enabled = excluded.startup_refresh_enabled,
+                updated_at = excluded.updated_at
+            """,
+            [enabled, _now()],
+        )
+
+    def reserve_startup_refresh(self, account_id: str, local_date: date) -> bool:
+        """Atomically reserve an account's one startup refresh for a local day."""
+        if not account_id.strip():
+            raise ValueError("account_id must not be empty")
+        try:
+            row = self._connection.execute(
+                """
+                INSERT INTO startup_refresh_outcomes (
+                    account_id, local_date, status, attempted_at
+                ) VALUES (?, ?, 'attempted', ?)
+                ON CONFLICT DO NOTHING
+                RETURNING account_id
+                """,
+                [account_id, local_date, _now()],
+            ).fetchone()
+        except duckdb.Error:
+            # A competing application instance owns the database write.
+            return False
+        return row is not None
+
+    def complete_startup_refresh(
+        self, account_id: str, local_date: date, *, failure_detail: str | None = None
+    ) -> StartupRefreshOutcome:
+        """Record the terminal outcome for a previously reserved startup attempt."""
+        status: StartupRefreshStatus = "failed" if failure_detail else "succeeded"
+        assignments = "status = ?, completed_at = ?, failure_detail = ?"
+        row = self._connection.execute(
+            f"UPDATE startup_refresh_outcomes SET {assignments} "
+            "WHERE account_id = ? AND local_date = ? AND status = 'attempted' "
+            "RETURNING *",
+            [
+                status,
+                _now(),
+                (
+                    None
+                    if failure_detail is None
+                    else _safe_failure_detail(failure_detail)
+                ),
+                account_id,
+                local_date,
+            ],
+        ).fetchone()
+        if row is None:
+            raise ValueError("startup refresh is not reserved")
+        return StartupRefreshOutcome(*row)
+
+    def get_startup_refresh_outcome(
+        self, account_id: str, local_date: date
+    ) -> StartupRefreshOutcome | None:
+        """Return the auditable startup-refresh outcome for one account/day."""
+        row = self._connection.execute(
+            "SELECT * FROM startup_refresh_outcomes "
+            "WHERE account_id = ? AND local_date = ?",
+            [account_id, local_date],
+        ).fetchone()
+        return None if row is None else StartupRefreshOutcome(*row)
 
     def _update_running_run(
         self, sync_run_id: str, assignments: str, values: list[object]
