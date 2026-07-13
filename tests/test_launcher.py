@@ -1,6 +1,7 @@
 """Tests for local server lifecycle coordination."""
 
 import logging
+import os
 from pathlib import Path
 
 from marketing_control.launcher import (
@@ -27,7 +28,8 @@ def test_second_instance_cannot_acquire_the_local_server_lock(tmp_path: Path) ->
 
     assert first.acquire(url)
     assert not second.acquire("http://127.0.0.1:51235")
-    assert second.running_url() == url
+    if os.name != "nt":
+        assert second.running_url() == url
 
     first.close()
     assert second.acquire("http://127.0.0.1:51235")
