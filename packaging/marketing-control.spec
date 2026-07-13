@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-project_root = Path(SPECPATH).parent.parent
+project_root = Path(SPECPATH).parent
 google_ads_datas, google_ads_binaries, google_ads_hiddenimports = collect_all(
     "google.ads.googleads"
 )
