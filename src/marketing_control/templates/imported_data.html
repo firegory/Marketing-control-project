@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Imported Data Preview | Marketing Control</title>
+  </head>
+  <body>
+    <main>
+      <p><a href="/">Home</a> | <a href="/integration-status">Integration status</a></p>
+      <h1>Imported Data Preview</h1>
+      <p>This local preview shows exact stored row counts and up to five representative rows per supported table. It does not calculate metrics, analytics, or aggregates.</p>
+      {% for item in preview %}
+      <section>
+        <h2>{{ item.entry.table }}</h2>
+        <p>{{ item.entry.kind|capitalize }}. {{ item.entry.description }}</p>
+        {% if item.entry.grain %}<p>Report grain: {{ item.entry.grain }}.</p>{% endif %}
+        <p>Status: <strong>{{ item.state }}</strong>.{% if item.row_count is not none %} Exact row count: {{ item.row_count }}.{% endif %}</p>
+        {% if item.rows %}
+        <table>
+          <thead><tr>{% for column in item.columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr></thead>
+          <tbody>{% for row in item.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </main>
+  </body>
+</html>
