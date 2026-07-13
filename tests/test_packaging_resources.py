@@ -18,6 +18,7 @@ def test_pyinstaller_spec_collects_runtime_resources() -> None:
     contents = spec.read_text(encoding="utf-8")
     assert '"templates"' in contents
     assert '"migrations"' in contents
+    assert 'collect_all("tzdata")' in contents
     assert 'name="Marketing Control"' in contents
 
 

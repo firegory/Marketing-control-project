@@ -16,6 +16,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "keyring>=25.7.0",
     "python-multipart>=0.0.20",
+    "tzdata>=2025.2",
     "uvicorn[standard]>=0.51.0",
 ]
 

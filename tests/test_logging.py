@@ -1,8 +1,11 @@
 """Tests for safe local log output."""
 
 import logging
+import os
 import stat
 from pathlib import Path
+
+import pytest
 
 from marketing_control.logging import configure_logging, redact_sensitive_values
 from marketing_control.settings import Settings
@@ -54,6 +57,7 @@ def test_configure_logging_preserves_other_handlers(tmp_path: Path) -> None:
         handler.close()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not enforce POSIX modes")
 def test_configured_log_redacts_messages_and_exceptions(tmp_path: Path) -> None:
     settings = Settings.load(
         "MarketingControl", environment={"HOME": str(tmp_path)}, platform="linux"
