@@ -50,6 +50,7 @@ class SingleInstance:
         handle.truncate()
         json.dump({"url": url}, handle)
         handle.flush()
+        os.fsync(handle.fileno())
         self._handle = handle
         return True
 
@@ -74,9 +75,12 @@ class SingleInstance:
         if os.name == "nt":
             import msvcrt
 
-            handle.seek(0)
-            handle.write(" ")
-            handle.flush()
+            # msvcrt locks an existing byte. Do not overwrite a record another
+            # instance owns while preparing a newly created lock file.
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(" ")
+                handle.flush()
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
             return
