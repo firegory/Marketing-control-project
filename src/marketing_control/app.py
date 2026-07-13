@@ -2,7 +2,8 @@
 
 import hmac
 import secrets
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Callable, cast
@@ -27,6 +28,7 @@ from marketing_control.google_ads import (
     normalize_optional_customer_id,
 )
 from marketing_control.google_ads_adapter import (
+    GoogleAdsConnectionState,
     GoogleAdsConnectionValidator,
     GoogleAdsSearchStreamAdapter,
 )
@@ -44,6 +46,7 @@ from marketing_control.oauth import (
     OAuthCancelledError,
     OAuthTokenExchangeError,
 )
+from marketing_control.refresh_triggers import StartupRefreshService
 from marketing_control.settings import Settings
 from marketing_control.storage import database_connection
 from marketing_control.sync_history import HistoryPreference, SyncRepository
@@ -62,9 +65,9 @@ def create_app(
     report_registry: ReportTaskRegistry | None = None,
     today: Callable[[], date] | None = None,
     now: Callable[[], datetime] | None = None,
+    startup_refresh_service: StartupRefreshService | None = None,
 ) -> FastAPI:
     """Create the loopback-only application's HTTP interface."""
-    app = FastAPI(title="Marketing Control", docs_url=None, redoc_url=None)
     settings = Settings.load() if settings is None else settings
     metadata_store = GoogleAdsSettingsStore(settings)
     credential_store = (
@@ -82,6 +85,20 @@ def create_app(
     now = (lambda: datetime.now(UTC)) if now is None else now
     report_registry = (
         ReportTaskRegistry(()) if report_registry is None else report_registry
+    )
+    startup_refresh_service = (
+        StartupRefreshService(settings, metadata_store, report_registry)
+        if startup_refresh_service is None
+        else startup_refresh_service
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        startup_refresh_service.run()
+        yield
+
+    app = FastAPI(
+        title="Marketing Control", docs_url=None, redoc_url=None, lifespan=lifespan
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -240,7 +257,26 @@ def create_app(
             repository = SyncRepository(connection)
             run = repository.latest_run()
             work_items = [] if run is None else repository.list_report_runs(run.id)
-        return _sync_runs_response(request, run, work_items, len(report_registry.tasks))
+            startup_refresh_enabled = repository.startup_refresh_enabled()
+        return _sync_runs_response(
+            request,
+            run,
+            work_items,
+            len(report_registry.tasks),
+            startup_refresh_enabled,
+        )
+
+    @app.post("/sync/startup-refresh")
+    def save_startup_refresh(
+        request: Request,
+        csrf_token: Annotated[str, Form()],
+        enabled: Annotated[bool, Form()] = False,
+    ) -> RedirectResponse:
+        """Save the opt-in state without starting a refresh."""
+        _verify_sync_csrf(request, csrf_token)
+        with database_connection(settings) as connection:
+            SyncRepository(connection).save_startup_refresh_enabled(enabled)
+        return RedirectResponse("/sync/runs", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/integration-status", response_class=HTMLResponse)
     def integration_status_page(request: Request) -> HTMLResponse:
@@ -334,13 +370,16 @@ def create_app(
     ) -> HTMLResponse:
         """Render the one-account Google Ads credential onboarding form."""
         csrf_token = secrets.token_urlsafe()
+        connection = connection_validator.connection_status()
+        if connection.state == GoogleAdsConnectionState.USABLE and connection.time_zone:
+            metadata_store.save_time_zone(connection.time_zone)
         response = _templates.TemplateResponse(
             request=request,
             name="google_ads_onboarding.html",
             context={
                 "csrf_token": csrf_token,
                 "configured": metadata_store.load() is not None,
-                "connection": connection_validator.connection_status(),
+                "connection": connection,
                 "oauth_message": _oauth_message(oauth_status),
             },
         )
@@ -521,7 +560,11 @@ def _data_history_response(
 
 
 def _sync_runs_response(
-    request: Request, run: object | None, work_items: Sequence[object], task_count: int
+    request: Request,
+    run: object | None,
+    work_items: Sequence[object],
+    task_count: int,
+    startup_refresh_enabled: bool,
 ) -> HTMLResponse:
     csrf_token = secrets.token_urlsafe()
     response = _templates.TemplateResponse(
@@ -532,6 +575,7 @@ def _sync_runs_response(
             "run": run,
             "work_items": work_items,
             "task_count": task_count,
+            "startup_refresh_enabled": startup_refresh_enabled,
         },
     )
     response.set_cookie("sync_runs_csrf", csrf_token, httponly=True, samesite="strict")

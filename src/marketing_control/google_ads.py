@@ -22,6 +22,7 @@ class GoogleAdsSettings:
     oauth_client_id: str
     customer_id: str
     login_customer_id: str | None
+    time_zone: str | None = None
 
 
 class GoogleAdsSettingsStore:
@@ -51,6 +52,21 @@ class GoogleAdsSettingsStore:
             login_customer_id=normalize_optional_customer_id(
                 _optional_text(data, "login_customer_id")
             ),
+            time_zone=_optional_text(data, "time_zone") or None,
+        )
+
+    def save_time_zone(self, time_zone: str) -> None:
+        """Persist the timezone discovered during a validated connection check."""
+        current = self.load()
+        if current is None:
+            return
+        self.save(
+            GoogleAdsSettings(
+                oauth_client_id=current.oauth_client_id,
+                customer_id=current.customer_id,
+                login_customer_id=current.login_customer_id,
+                time_zone=time_zone,
+            )
         )
 
 
