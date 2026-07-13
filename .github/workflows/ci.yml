@@ -42,8 +42,8 @@ jobs:
       - name: Smoke test packaged application and resources
         shell: pwsh
         run: |
-          & ".\dist\Marketing Control\Marketing Control.exe" --help
-          if ($LASTEXITCODE -ne 0) { throw "Packaged launcher failed" }
+          $process = Start-Process -FilePath ".\dist\Marketing Control\Marketing Control.exe" -ArgumentList "--help" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged launcher failed" }
           $root = "dist\Marketing Control\_internal\marketing_control"
           if (!(Test-Path "dist\Marketing Control\Marketing Control.exe")) { throw "Missing executable" }
           if (!(Test-Path "$root\templates\index.html")) { throw "Missing templates" }
