@@ -6,10 +6,12 @@ adapters and network clients remain outside this module.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from marketing_control.sync_diagnostics import classify_failure
 from marketing_control.sync_history import SyncRepository, SyncRun
 from marketing_control.sync_planning import DateRange, ReportRangePlanner
 
@@ -51,11 +53,11 @@ class SyncRunCoordinator:
     def retry_failed(self, previous_run_id: str) -> SyncRun:
         """Create a run containing only report work failed by a prior run."""
         previous = self._repository.get_run(previous_run_id)
-        failed_names = {
+        failed_names = tuple(
             work.report_name
             for work in self._repository.list_report_runs(previous.id)
             if work.status == "failed"
-        }
+        )
         if not failed_names:
             raise ValueError("sync run has no failed report work to retry")
         tasks = tuple(
@@ -63,9 +65,23 @@ class SyncRunCoordinator:
         )
         if len(tasks) != len(failed_names):
             raise ValueError("a failed report is no longer registered")
-        return self._execute(
-            DateRange(previous.requested_start_date, previous.requested_end_date), tasks
+        audit = self._repository.start_retry_audit(previous.id, failed_names)
+        try:
+            retry = self._execute(
+                DateRange(
+                    previous.requested_start_date, previous.requested_end_date
+                ),
+                tasks,
+            )
+        except Exception:
+            self._repository.finish_retry_audit(audit.id, None, "failed")
+            raise
+        self._repository.finish_retry_audit(
+            audit.id,
+            retry.id,
+            "succeeded" if retry.status == "succeeded" else "failed",
         )
+        return retry
 
     def _execute(
         self, requested_range: DateRange, tasks: Sequence[ReportTask]
@@ -85,7 +101,16 @@ class SyncRunCoordinator:
                 try:
                     task.execute(ranges)
                 except Exception as error:
-                    self._repository.fail_report_run(run.id, task.name, str(error))
+                    category = classify_failure(error)
+                    logging.getLogger("marketing_control.sync").exception(
+                        "sync report failed run_id=%s report=%s category=%s",
+                        run.id,
+                        task.name,
+                        category,
+                    )
+                    self._repository.fail_report_run(
+                        run.id, task.name, str(error), category
+                    )
                     continue
                 self._planner.record_coverage(task.name, ranges)
                 self._repository.complete_report_run(run.id, task.name, len(ranges))

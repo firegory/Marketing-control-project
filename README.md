@@ -4,7 +4,7 @@ Minimal Python 3.12 foundation for the Marketing Control project.
 
 ## Sync orchestration
 
-`ReportTaskRegistry` order is the documented, controlled report order. Tasks are injected by the host and receive only planned `DateRange` values, so the coordinator creates neither network clients nor report queries. Each run persists queued, running, succeeded, failed, or skipped work per report, including timestamps, progress, and bounded redacted diagnostic text. Failures do not prevent later independent tasks; a retry queues only the prior run's failed reports.
+`ReportTaskRegistry` order is the documented, controlled report order. Tasks are injected by the host and receive only planned `DateRange` values, so the coordinator creates neither network clients nor report queries. Each run persists queued, running, succeeded, failed, or skipped work per report, including timestamps, progress, bounded redacted diagnostic text, and a stable failure category. Failures do not prevent later independent tasks; a retry queues only the prior run's failed reports and records its source report set, resulting run, and outcome. `/sync/diagnostics` is a local server-rendered view of failed runs, reports, retry audits, and bounded relevant log excerpts; it is not analytics.
 
 ## Local setup
 

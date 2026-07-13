@@ -47,7 +47,7 @@ def _coverage(end_date: date) -> ReportCoverage:
 
 
 def _work(status: Literal["failed"]) -> SyncReportRun:
-    return SyncReportRun("run", "daily", status, 1, 0, None, None, "safe detail")
+    return SyncReportRun("run", "daily", status, 1, 0, None, None, "safe detail", None)
 
 
 def test_integration_status_route_shows_disconnected_connection() -> None:
