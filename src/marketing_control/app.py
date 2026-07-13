@@ -33,6 +33,7 @@ from marketing_control.google_ads_adapter import (
     GoogleAdsConnectionValidator,
     GoogleAdsSearchStreamAdapter,
 )
+from marketing_control.imported_data_preview import imported_data_preview
 from marketing_control.initial_history import (
     HistoryPreset,
     ads_history_boundary,
@@ -326,6 +327,24 @@ def create_app(
                     now=now(),
                 )
             },
+        )
+
+    @app.get("/imported-data", response_class=HTMLResponse)
+    def imported_data(request: Request) -> HTMLResponse:
+        """Render the fixed, local-only imported table catalog and samples."""
+        with database_connection(settings) as connection:
+            repository = SyncRepository(connection)
+            latest_run = repository.latest_run()
+            latest_work = (
+                ()
+                if latest_run is None
+                else tuple(repository.list_report_runs(latest_run.id))
+            )
+            preview = imported_data_preview(connection, latest_work)
+        return _templates.TemplateResponse(
+            request=request,
+            name="imported_data.html",
+            context={"preview": preview},
         )
 
     @app.post("/sync/runs")
