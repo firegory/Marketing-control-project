@@ -50,6 +50,7 @@ class SingleInstance:
         handle.truncate()
         json.dump({"url": url}, handle)
         handle.flush()
+        os.fsync(handle.fileno())
         self._handle = handle
         return True
 
