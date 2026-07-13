@@ -24,3 +24,43 @@ jobs:
         run: uv run mypy
       - name: Test
         run: uv run pytest
+
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install locked dependencies
+        run: uv sync --all-groups --locked
+      - name: Test
+        run: uv run pytest
+      - name: Build onedir distribution
+        run: uv run pyinstaller --clean --noconfirm packaging/marketing-control.spec
+      - name: Smoke test packaged application and resources
+        shell: pwsh
+        run: |
+          & ".\dist\Marketing Control\Marketing Control.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Packaged launcher failed" }
+          $root = "dist\Marketing Control\_internal\marketing_control"
+          if (!(Test-Path "dist\Marketing Control\Marketing Control.exe")) { throw "Missing executable" }
+          if (!(Test-Path "$root\templates\index.html")) { throw "Missing templates" }
+          if (!(Test-Path "$root\migrations\0001_create_schema_migrations.sql")) { throw "Missing migrations" }
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress --limit-output
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          $version = uv run python -c "from importlib.metadata import version; print(version('marketing-control'))"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\marketing-control.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marketing-control-windows-onedir
+          path: dist/Marketing Control
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marketing-control-windows-installer
+          path: installer/marketing-control-setup-*-x64.exe

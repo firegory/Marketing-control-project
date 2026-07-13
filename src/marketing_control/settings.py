@@ -17,6 +17,16 @@ class AppPaths:
     config: Path
     logs: Path
 
+    @property
+    def exports(self) -> Path:
+        """Return the configured local directory for completed data exports."""
+        return self.data.parent / "Exports"
+
+    @property
+    def backups(self) -> Path:
+        """Return the configured local directory for completed backup packages."""
+        return self.data.parent / "Backups"
+
     @classmethod
     def for_user(
         cls,

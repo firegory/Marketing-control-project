@@ -27,6 +27,7 @@ dev = [
     "httpx>=0.28.1",
     "mypy>=1.13,<2",
     "pytest>=8.3,<9",
+    "pyinstaller==6.17.0",
     "ruff>=0.8,<1",
     "types-grpcio>=1.82.1.20260711",
 ]
